@@ -1,0 +1,680 @@
+<title>Cheeky Mail Club Stamp Card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:ital,wght@0,400;0,600;0,700;1,400&family=Courier+Prime:wght@400;700&display=swap">
+
+<style>
+  /* ============ TOKENS ============ */
+  :root{
+    --paper:#FDF2F6;
+    --paper-2:#F7E8EE;
+    --card:#FFFDFB;
+    --ink:#2C3B31;
+    --ink-soft:#5E6E62;
+    --green:#4F9E6A;
+    --green-deep:#3B7A51;
+    --green-wash:#E4F1E7;
+    --pink:#E4619A;
+    --pink-deep:#C7457F;
+    --pink-wash:#FBE0EC;
+    --gold:#DDA13A;
+    --gold-wash:#F6E9CE;
+    --perf:#E0CDD5;
+    --hair:#EAD9E0;
+    --postmark:rgba(44,59,49,.5);
+    --shadow:24px 24px 60px -30px rgba(76,42,60,.45);
+
+    --font-display:"Fredoka","Trebuchet MS",sans-serif;
+    --font-body:"Nunito","Segoe UI",system-ui,sans-serif;
+    --font-mono:"Courier Prime","Courier New",monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#1A231D;
+      --paper-2:#212C24;
+      --card:#26312A;
+      --ink:#F1E7EC;
+      --ink-soft:#B4C1B7;
+      --green:#7FC894;
+      --green-deep:#9CD7AC;
+      --green-wash:#2C3A31;
+      --pink:#F58FBC;
+      --pink-deep:#F8A9CD;
+      --pink-wash:#37272F;
+      --gold:#E6BC66;
+      --gold-wash:#38301F;
+      --perf:#45514A;
+      --hair:#33403700;
+      --hair:#334037;
+      --postmark:rgba(241,231,236,.5);
+      --shadow:24px 24px 60px -28px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#1A231D;
+    --paper-2:#212C24;
+    --card:#26312A;
+    --ink:#F1E7EC;
+    --ink-soft:#B4C1B7;
+    --green:#7FC894;
+    --green-deep:#9CD7AC;
+    --green-wash:#2C3A31;
+    --pink:#F58FBC;
+    --pink-deep:#F8A9CD;
+    --pink-wash:#37272F;
+    --gold:#E6BC66;
+    --gold-wash:#38301F;
+    --perf:#45514A;
+    --hair:#334037;
+    --postmark:rgba(241,231,236,.5);
+    --shadow:24px 24px 60px -28px rgba(0,0,0,.6);
+  }
+
+  /* ============ BASE ============ */
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:var(--font-body);
+    font-size:1.02rem;
+    line-height:1.62;
+    color:var(--ink);
+    background:var(--paper);
+    background-image:
+      radial-gradient(circle at 12% 8%, color-mix(in srgb, var(--green-wash) 70%, transparent), transparent 38%),
+      radial-gradient(circle at 88% 22%, color-mix(in srgb, var(--pink-wash) 80%, transparent), transparent 34%);
+    background-attachment:fixed;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{font-family:var(--font-display);font-weight:600;line-height:1.12;text-wrap:balance;margin:0}
+  p{margin:0}
+  a{color:var(--pink-deep);text-underline-offset:3px;text-decoration-thickness:1.5px}
+  a:hover{color:var(--pink)}
+  :focus-visible{outline:3px solid var(--pink);outline-offset:3px;border-radius:4px}
+
+  .wrap{max-width:70rem;margin:0 auto;padding:0 clamp(1.1rem,4vw,2.5rem)}
+  .eyebrow{
+    font-family:var(--font-body);font-weight:700;font-size:.74rem;
+    letter-spacing:.18em;text-transform:uppercase;color:var(--green-deep);
+    display:inline-flex;align-items:center;gap:.55em;margin:0
+  }
+  .eyebrow::before{content:"";width:1.6rem;height:2px;background:var(--green);border-radius:2px}
+
+  /* ============ HERO ============ */
+  header.hero{padding:clamp(2.4rem,6vw,4.6rem) 0 clamp(2rem,5vw,3.4rem)}
+  .hero-grid{
+    display:grid;grid-template-columns:minmax(0,1fr) auto;gap:clamp(1.6rem,5vw,3.4rem);
+    align-items:center
+  }
+  @media (max-width:760px){ .hero-grid{grid-template-columns:1fr;text-align:left} }
+  .hero h1{
+    font-size:clamp(2.5rem,7vw,4rem);font-weight:700;letter-spacing:-.01em;
+    margin:.5rem 0 .1rem;color:var(--ink)
+  }
+  .hero h1 .amp{color:var(--pink)}
+  .hero .lede{font-size:clamp(1.05rem,2.4vw,1.28rem);color:var(--ink-soft);max-width:34ch;margin-top:.9rem}
+  .hero .sub{margin-top:1.1rem;font-size:.95rem;color:var(--ink-soft)}
+  .hero .sub b{color:var(--ink);font-weight:700}
+  .cta-row{display:flex;flex-wrap:wrap;gap:.8rem;margin-top:1.7rem}
+
+  .btn{
+    font-family:var(--font-display);font-weight:600;font-size:1rem;
+    border:none;cursor:pointer;border-radius:999px;padding:.72em 1.5em;
+    display:inline-flex;align-items:center;gap:.5em;text-decoration:none;
+    transition:transform .14s ease, box-shadow .14s ease, background .14s ease
+  }
+  .btn-primary{background:var(--pink);color:#fff;box-shadow:0 10px 22px -10px var(--pink-deep)}
+  .btn-primary:hover{background:var(--pink-deep);color:#fff;transform:translateY(-2px)}
+  .btn-ghost{background:var(--green-wash);color:var(--green-deep)}
+  .btn-ghost:hover{background:color-mix(in srgb,var(--green-wash) 70%, var(--green) 30%);transform:translateY(-2px)}
+  .btn-mini{
+    font-family:var(--font-body);font-weight:700;font-size:.82rem;border-radius:999px;
+    padding:.42em 1em;border:1.5px solid var(--hair);background:var(--card);color:var(--ink);cursor:pointer;
+    transition:border-color .14s ease, color .14s ease
+  }
+  .btn-mini:hover{border-color:var(--pink);color:var(--pink-deep)}
+
+  /* postmark badge */
+  .postmark{width:clamp(180px,40vw,236px);height:auto;flex-shrink:0;filter:drop-shadow(0 12px 24px rgba(76,42,60,.22))}
+  .postmark .pm-ring{fill:none;stroke:var(--green-deep);stroke-width:2.4}
+  .postmark .pm-ring-2{fill:none;stroke:var(--pink);stroke-width:1.4}
+  .postmark .pm-text{fill:var(--green-deep);font-family:var(--font-mono);font-weight:700;font-size:13.2px;letter-spacing:2.1px}
+  .postmark .pm-date{fill:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:19px;letter-spacing:1px}
+  .postmark .pm-small{fill:var(--pink-deep);font-family:var(--font-mono);font-weight:700;font-size:10px;letter-spacing:2px}
+  .postmark .pm-wave{fill:none;stroke:var(--pink);stroke-width:3;stroke-linecap:round;opacity:.85}
+
+  /* ============ SECTIONS ============ */
+  section{padding:clamp(2.2rem,6vw,3.8rem) 0}
+  .section-head{max-width:44ch;margin-bottom:2rem}
+  .section-head h2{font-size:clamp(1.6rem,4vw,2.15rem);margin-top:.55rem;color:var(--ink)}
+  .section-head p{margin-top:.7rem;color:var(--ink-soft)}
+
+  /* how it works — a real 3-step sequence */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:1.1rem;counter-reset:step}
+  @media (max-width:720px){ .steps{grid-template-columns:1fr} }
+  .step{
+    background:var(--card);border:1.5px solid var(--hair);border-radius:18px;
+    padding:1.5rem 1.4rem;position:relative
+  }
+  .step .num{
+    counter-increment:step;font-family:var(--font-mono);font-weight:700;font-size:.82rem;
+    color:var(--pink-deep);letter-spacing:.1em
+  }
+  .step .num::before{content:"NO. " counter(step,decimal-leading-zero)}
+  .step h3{font-size:1.12rem;margin:.5rem 0 .4rem;color:var(--ink)}
+  .step p{font-size:.94rem;color:var(--ink-soft)}
+
+  /* ============ THE CARD ============ */
+  #card{position:relative}
+  .card-shell{
+    background:var(--card);
+    border-radius:26px;
+    padding:clamp(1.4rem,4.5vw,2.6rem);
+    box-shadow:var(--shadow);
+    border:1.5px solid var(--hair);
+    position:relative;overflow:hidden
+  }
+  .washi{position:absolute;width:150px;height:34px;opacity:.55;pointer-events:none}
+  .washi.a{background:repeating-linear-gradient(45deg,var(--pink) 0 8px,transparent 8px 16px);background-color:var(--pink-wash);top:-12px;left:8%;transform:rotate(-6deg)}
+  .washi.b{background:repeating-linear-gradient(-45deg,var(--green) 0 8px,transparent 8px 16px);background-color:var(--green-wash);bottom:-12px;right:6%;transform:rotate(-4deg)}
+
+  .card-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:1rem;margin-bottom:1.6rem}
+  .card-top h2{font-size:clamp(1.4rem,3.4vw,1.9rem);color:var(--ink)}
+  .tally{
+    font-family:var(--font-mono);font-weight:700;text-align:right;color:var(--ink-soft);
+    font-size:.86rem;line-height:1.5;white-space:nowrap
+  }
+  .tally b{display:block;font-size:1.5rem;color:var(--green-deep)}
+
+  /* stamp strip */
+  .strip{
+    display:grid;grid-template-columns:repeat(5,1fr);gap:clamp(.5rem,1.6vw,.9rem);
+    list-style:none;margin:0;padding:0
+  }
+  @media (max-width:520px){ .strip{grid-template-columns:repeat(2,1fr)} }
+  .stamp{
+    position:relative;aspect-ratio:1/1.16;border-radius:4px;
+    background:var(--paper-2);
+    border:2.5px dashed var(--perf);
+    box-shadow:0 0 0 4px var(--card), 0 8px 16px -10px rgba(76,42,60,.4);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:.5rem;text-align:center;color:var(--ink-soft);
+    transition:transform .16s ease
+  }
+  .stamp .glyph{width:38%;height:auto;opacity:.4}
+  .stamp .n{position:absolute;top:5px;left:7px;font-family:var(--font-mono);font-size:.66rem;font-weight:700;opacity:.55}
+  .stamp .rw{font-size:.62rem;line-height:1.25;margin-top:.35rem;font-weight:700;letter-spacing:.02em}
+
+  .stamp.earned{
+    background:var(--card);border-color:var(--green);color:var(--green-deep);
+    transform:rotate(-1.4deg)
+  }
+  .stamp.earned:nth-child(even){transform:rotate(1.6deg)}
+  .stamp.earned .glyph{opacity:.9;color:var(--green)}
+  .stamp.earned .month{
+    font-family:var(--font-mono);font-weight:700;font-size:.6rem;color:var(--postmark);
+    letter-spacing:.06em;margin-top:.3rem
+  }
+  .stamp .frank{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    pointer-events:none;opacity:0
+  }
+  .stamp.earned .frank{opacity:1}
+  .stamp .frank svg{width:78%;height:78%;color:var(--postmark);transform:rotate(-11deg)}
+
+  .stamp.milestone{border-color:var(--gold);border-style:solid;background:var(--gold-wash)}
+  .stamp.milestone .glyph{color:var(--gold);opacity:.85}
+  .stamp.milestone .rw{color:var(--gold)}
+  .stamp.milestone.earned{background:var(--card);box-shadow:0 0 0 4px var(--card),0 0 0 6px var(--gold),0 10px 20px -10px var(--gold)}
+  .stamp.milestone.earned .rw{color:var(--green-deep)}
+
+  @media (prefers-reduced-motion:reduce){
+    .stamp,.stamp.earned,.stamp.earned:nth-child(even){transform:none}
+    .btn:hover{transform:none}
+    html{scroll-behavior:auto}
+  }
+
+  .legend{
+    display:flex;flex-wrap:wrap;gap:.6rem 1.4rem;margin-top:1.4rem;
+    font-size:.84rem;color:var(--ink-soft)
+  }
+  .legend span{display:inline-flex;align-items:center;gap:.5em}
+  .swatch{width:14px;height:14px;border-radius:3px;flex-shrink:0}
+  .swatch.g{background:var(--green)}
+  .swatch.o{background:var(--gold)}
+  .swatch.d{background:var(--paper-2);border:2px dashed var(--perf)}
+
+  /* form + progress */
+  .card-body{display:grid;grid-template-columns:1fr 1fr;gap:1.6rem;margin-top:1.9rem}
+  @media (max-width:720px){ .card-body{grid-template-columns:1fr} }
+  fieldset{border:1.5px solid var(--hair);border-radius:16px;padding:1.2rem 1.2rem 1.35rem;margin:0}
+  legend{
+    font-family:var(--font-body);font-weight:700;font-size:.72rem;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--green-deep);padding:0 .5em
+  }
+  label.fld{display:block;font-size:.8rem;font-weight:700;color:var(--ink);margin:.9rem 0 .3rem}
+  label.fld:first-of-type{margin-top:.2rem}
+  input[type=text],select{
+    width:100%;font-family:var(--font-body);font-size:.95rem;color:var(--ink);
+    background:var(--paper);border:1.5px solid var(--hair);border-radius:10px;padding:.6em .8em
+  }
+  input[type=text]:focus,select:focus{border-color:var(--pink);outline:none}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}
+  .stepper{display:flex;align-items:center;gap:.6rem;margin-top:.4rem}
+  .stepper button{
+    width:2.1rem;height:2.1rem;border-radius:8px;border:1.5px solid var(--hair);
+    background:var(--card);color:var(--ink);font-size:1.1rem;font-family:var(--font-display);cursor:pointer;line-height:1
+  }
+  .stepper button:hover{border-color:var(--pink);color:var(--pink-deep)}
+  .stepper .val{font-family:var(--font-mono);font-weight:700;min-width:3.5ch;text-align:center}
+  .hint{font-size:.78rem;color:var(--ink-soft);margin-top:.5rem}
+
+  .progress{background:var(--green-wash);border-radius:16px;padding:1.3rem 1.3rem 1.4rem;color:var(--ink)}
+  .progress h3{font-size:1.05rem;color:var(--green-deep);margin-bottom:.5rem}
+  .progress .big{font-family:var(--font-display);font-weight:600;font-size:1.15rem;color:var(--ink);margin:.5rem 0}
+  .progress .bar{height:10px;border-radius:999px;background:color-mix(in srgb,var(--green) 22%, transparent);overflow:hidden;margin:.7rem 0 .3rem}
+  .progress .bar i{display:block;height:100%;background:var(--green);border-radius:999px;transition:width .5s ease}
+  .progress .next{font-size:.9rem;color:var(--ink-soft)}
+
+  .claim{
+    margin-top:1rem;border:2px dashed var(--gold);border-radius:14px;background:var(--gold-wash);
+    padding:1rem 1.1rem
+  }
+  .claim.hidden{display:none}
+  .claim .k{font-family:var(--font-body);font-weight:700;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);filter:brightness(.85)}
+  .claim .reward{font-family:var(--font-display);font-weight:600;font-size:1.05rem;color:var(--ink);margin:.35rem 0 .7rem}
+  .code-row{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}
+  .code{
+    font-family:var(--font-mono);font-weight:700;font-size:1.15rem;letter-spacing:.12em;
+    background:var(--card);border:1.5px solid var(--hair);border-radius:8px;padding:.35em .7em;color:var(--ink)
+  }
+  .claim p.dm{font-size:.82rem;color:var(--ink-soft);margin-top:.7rem}
+  .claim label.done{display:flex;align-items:center;gap:.55em;font-size:.85rem;margin-top:.8rem;cursor:pointer;color:var(--ink)}
+
+  .empty-note{font-size:.9rem;color:var(--ink-soft);font-style:italic}
+
+  /* ============ FAQ ============ */
+  details{border-bottom:1.5px solid var(--hair);padding:1rem 0}
+  details summary{
+    font-family:var(--font-display);font-weight:500;font-size:1.05rem;cursor:pointer;
+    list-style:none;display:flex;justify-content:space-between;align-items:center;gap:1rem;color:var(--ink)
+  }
+  details summary::-webkit-details-marker{display:none}
+  details summary::after{content:"+";font-size:1.4rem;color:var(--pink);transition:transform .2s ease}
+  details[open] summary::after{transform:rotate(45deg)}
+  details p{margin-top:.7rem;color:var(--ink-soft);font-size:.94rem;max-width:60ch}
+
+  /* ============ FOOTER ============ */
+  footer{
+    text-align:center;padding:clamp(2.4rem,6vw,3.6rem) 0 3rem;
+    border-top:1.5px solid var(--hair);margin-top:1rem
+  }
+  footer .mk{font-family:var(--font-display);font-weight:600;font-size:1.1rem;color:var(--ink)}
+  footer p{font-size:.85rem;color:var(--ink-soft);margin-top:.5rem}
+  footer .fine{font-size:.76rem;margin-top:1rem;max-width:52ch;margin-inline:auto}
+</style>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Members only &middot; Patreon</p>
+      <h1>The Cheeky<br>Mail Club <span class="amp">&amp;</span><br>Stamp Card</h1>
+      <p class="lede">A little post, a lot of cheek. Every month you&rsquo;re aboard earns a stamp &mdash; and stamps turn into treats.</p>
+      <p class="sub">For subscribers of <b>@toocheekytocare_</b>. Collect a stamp a month: <b>5</b> gets you a free die-cut sticker, <b>10</b> gets you 50% off the shop plus a free sticker sheet.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#card">Open my stamp card</a>
+        <a class="btn btn-ghost" href="https://www.patreon.com/c/toocheekytocare_" target="_blank" rel="noopener">Join on Patreon</a>
+      </div>
+    </div>
+
+    <svg class="postmark" viewBox="0 0 240 240" role="img" aria-label="The Cheeky Mail Club postmark">
+      <defs>
+        <path id="pmArcTop" d="M 40,120 a 80,80 0 0,1 160,0" fill="none"></path>
+        <path id="pmArcBot" d="M 44,120 a 76,76 0 0,0 152,0" fill="none"></path>
+      </defs>
+      <circle class="pm-ring" cx="120" cy="120" r="92"></circle>
+      <circle class="pm-ring-2" cx="120" cy="120" r="82"></circle>
+      <text class="pm-text"><textPath href="#pmArcTop" startOffset="50%" text-anchor="middle">THE CHEEKY MAIL CLUB</textPath></text>
+      <text class="pm-text"><textPath href="#pmArcBot" startOffset="50%" text-anchor="middle">&#9733; CHEEK PAID IN FULL &#9733;</textPath></text>
+      <text class="pm-date" x="120" y="114" text-anchor="middle" id="pmDate">07 SEP</text>
+      <text class="pm-small" x="120" y="136" text-anchor="middle" id="pmYear">2026</text>
+      <path class="pm-wave" d="M 18,150 q 12,-12 24,0 t 24,0"></path>
+      <path class="pm-wave" d="M 18,164 q 12,-12 24,0 t 24,0"></path>
+      <path class="pm-wave" d="M 174,150 q 12,-12 24,0 t 24,0"></path>
+      <path class="pm-wave" d="M 174,164 q 12,-12 24,0 t 24,0"></path>
+    </svg>
+  </div>
+</header>
+
+<main>
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">How it works</p>
+        <h2>Three steps from mailbox to reward</h2>
+        <p>Your card lives right here in your browser and quietly adds a stamp for every month you&rsquo;ve been a member.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <span class="num"></span>
+          <h3>Join the Mail Club</h3>
+          <p>Subscribe to <b>@toocheekytocare_</b> on Patreon. Your membership start date is the only thing the card needs.</p>
+        </div>
+        <div class="step">
+          <span class="num"></span>
+          <h3>Set your start month</h3>
+          <p>Pop in the month you joined. A stamp lands for that month and every month since &mdash; the card keeps counting on its own.</p>
+        </div>
+        <div class="step">
+          <span class="num"></span>
+          <h3>Claim your treat</h3>
+          <p>Hit stamp 5 or 10 and a claim code appears. Send it to me by Patreon DM and your reward goes out with the next post.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="card">
+    <div class="wrap">
+      <div class="card-shell">
+        <span class="washi a" aria-hidden="true"></span>
+        <span class="washi b" aria-hidden="true"></span>
+
+        <div class="card-top">
+          <div>
+            <p class="eyebrow">Your card</p>
+            <h2 id="cardName">Cheeky Mail Club Stamp Card</h2>
+          </div>
+          <div class="tally">
+            <b id="tallyNum">0</b>
+            <span id="tallyMeta">stamps collected</span>
+          </div>
+        </div>
+
+        <ol class="strip" id="strip" aria-label="Stamp card, ten stamps per cycle"></ol>
+
+        <div class="legend">
+          <span><i class="swatch d"></i> Waiting for a stamp</span>
+          <span><i class="swatch g"></i> Stamped &mdash; one month aboard</span>
+          <span><i class="swatch o"></i> Reward stamp (5 &amp; 10)</span>
+        </div>
+
+        <div class="card-body">
+          <fieldset>
+            <legend>Your details</legend>
+            <label class="fld" for="fName">Name or Patreon handle</label>
+            <input type="text" id="fName" autocomplete="off" placeholder="e.g. Bea Postworthy" spellcheck="false">
+
+            <label class="fld" for="fMonth">Month you joined</label>
+            <div class="row2">
+              <select id="fMonth" aria-label="Join month"></select>
+              <select id="fYear" aria-label="Join year"></select>
+            </div>
+
+            <label class="fld">Need to nudge the count?</label>
+            <div class="stepper">
+              <button type="button" id="adjDown" aria-label="Remove a stamp">&minus;</button>
+              <span class="val" id="adjVal">0</span>
+              <button type="button" id="adjUp" aria-label="Add a stamp">+</button>
+              <span class="hint" style="margin-top:0">manual adjustment</span>
+            </div>
+            <p class="hint">Membership charges on join, so your first month counts as stamp 1. Use the nudge only if a pause or re-join threw the count off &mdash; I&rsquo;ll check against Patreon before sending anything.</p>
+            <button type="button" class="btn-mini" id="resetBtn" style="margin-top:.9rem">Reset this card</button>
+          </fieldset>
+
+          <div class="progress" id="progress">
+            <h3>Where you&rsquo;re at</h3>
+            <p class="big" id="progBig">Add your start month to begin your card.</p>
+            <div class="bar"><i id="progBar" style="width:0%"></i></div>
+            <p class="next" id="progNext">Stamp 5 unlocks your first reward.</p>
+
+            <div class="claim hidden" id="claim">
+              <p class="k">Reward unlocked</p>
+              <p class="reward" id="claimReward"></p>
+              <div class="code-row">
+                <span class="code" id="claimCode">CMC-00-0000</span>
+                <button type="button" class="btn-mini" id="copyBtn">Copy code</button>
+              </div>
+              <p class="dm">Send this code to <b>@toocheekytocare_</b> in a Patreon message to claim.</p>
+              <label class="done"><input type="checkbox" id="claimedChk"> I&rsquo;ve sent my code &mdash; hide this</label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Good to know</p>
+        <h2>Questions from the mailroom</h2>
+      </div>
+      <details>
+        <summary>Does the card check my Patreon automatically?</summary>
+        <p>Not yet &mdash; it runs on the honour system. You tell it when you joined, it counts the months, and it gives you a claim code. When you send that code I cross-check it against your membership on Patreon before your reward goes out, so the count needs to be real.</p>
+      </details>
+      <details>
+        <summary>What counts as a stamp?</summary>
+        <p>One stamp per month of active membership, starting with the month you joined. Every 5 stamps is a reward: stamp 5 is a free die-cut sticker, stamp 10 is 50% off the online shop plus a free sticker sheet. After 10 the card starts a fresh cycle and the rewards come round again.</p>
+      </details>
+      <details>
+        <summary>I paused my membership &mdash; what happens?</summary>
+        <p>Use the manual nudge to take off the months you were away, or just message me and I&rsquo;ll sort your count out. Paused months don&rsquo;t earn stamps, but nothing you&rsquo;ve already claimed disappears.</p>
+      </details>
+      <details>
+        <summary>Will I lose my card if I change device?</summary>
+        <p>The card is saved in this browser only. On a new phone or laptop, just enter your start month again &mdash; the stamp count is worked out from the date, so it&rsquo;ll catch right back up.</p>
+      </details>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="mk">The Cheeky Mail Club</p>
+    <p>Run with love by <a href="https://www.patreon.com/c/toocheekytocare_" target="_blank" rel="noopener">@toocheekytocare_</a> on Patreon</p>
+    <p class="fine">Rewards are for current members and are verified against Patreon before dispatch. Reward details may change &mdash; the latest terms are always the ones posted on Patreon.</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  var KEY = "cmc-stampcard-v1";
+  var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  var MONTHS_SHORT = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+
+  var GLYPHS = [
+    '<path d="M3 6h18v12H3z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 7l9 6 9-6" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+    '<path d="M12 3c4 3 6 7 6 10a6 6 0 0 1-12 0c0-3 2-7 6-10z" fill="currentColor"/><path d="M12 21V9" stroke="var(--card)" stroke-width="1.4"/>',
+    '<path d="M12 20S4 14 4 9a4 4 0 0 1 8-1 4 4 0 0 1 8 1c0 5-8 11-8 11z" fill="currentColor"/>',
+    '<g fill="currentColor"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="5" rx="2.4" ry="3.4"/><ellipse cx="12" cy="19" rx="2.4" ry="3.4"/><ellipse cx="5" cy="12" rx="3.4" ry="2.4"/><ellipse cx="19" cy="12" rx="3.4" ry="2.4"/></g>'
+  ];
+  var GIFT = '<path d="M4 9h16v11H4z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 6h18v3H3z" fill="currentColor" opacity=".85"/><path d="M12 6v14M12 6c-2-3-6-2-6 0 0 1.5 3 1.5 6 0zm0 0c2-3 6-2 6 0 0 1.5-3 1.5-6 0z" fill="none" stroke="currentColor" stroke-width="1.6"/>';
+  var FRANK = '<svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="34" stroke="currentColor" stroke-width="3"/><circle cx="50" cy="50" r="26" stroke="currentColor" stroke-width="1.4"/><path d="M4 44q7-7 14 0t14 0M4 56q7-7 14 0t14 0M68 44q7-7 14 0t14 0M68 56q7-7 14 0t14 0" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>';
+
+  var $ = function(id){ return document.getElementById(id); };
+  var state = load();
+
+  function load(){
+    try{ var v = JSON.parse(localStorage.getItem(KEY)); return v && typeof v === "object" ? v : {}; }
+    catch(e){ return {}; }
+  }
+  function persist(){
+    try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){}
+  }
+
+  function hasStart(){
+    return typeof state.y === "number" && typeof state.m === "number";
+  }
+  function totalStamps(){
+    if(!hasStart()) return 0;
+    var now = new Date();
+    var elapsed = (now.getFullYear() - state.y) * 12 + (now.getMonth() - state.m);
+    var t = elapsed + 1 + (state.adj || 0);
+    return t > 0 ? t : 0;
+  }
+  function monthLabelFor(globalNum){
+    // stamp 1 == join month
+    if(!hasStart()) return "";
+    var idx = state.m + (globalNum - 1);
+    var y = state.y + Math.floor(idx / 12);
+    var m = ((idx % 12) + 12) % 12;
+    return MONTHS_SHORT[m] + " " + String(y).slice(2);
+  }
+  function rewardText(globalNum){
+    if(globalNum % 10 === 0) return "50% off the online shop + a free sticker sheet";
+    if(globalNum % 5 === 0) return "A free die-cut sticker";
+    return "";
+  }
+  function claimCode(num){
+    var base = (state.name || "friend").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if(!base) base = "FRIEND";
+    var h = 5381, s = base + "#" + num;
+    for(var i = 0; i < s.length; i++){ h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; }
+    var code = h.toString(36).toUpperCase().replace(/[^A-Z0-9]/g, "0");
+    code = (code + "0000").slice(0, 4);
+    return "CMC-" + String(num).padStart(2, "0") + "-" + code;
+  }
+
+  function buildControls(){
+    var mSel = $("fMonth"), ySel = $("fYear");
+    var optM = '<option value="">&mdash; month &mdash;</option>';
+    for(var i = 0; i < 12; i++){ optM += '<option value="' + i + '">' + MONTHS[i] + '</option>'; }
+    mSel.innerHTML = optM;
+    var yNow = new Date().getFullYear();
+    var optY = '<option value="">&mdash; year &mdash;</option>';
+    for(var y = yNow; y >= yNow - 8; y--){ optY += '<option value="' + y + '">' + y + '</option>'; }
+    ySel.innerHTML = optY;
+
+    var d = new Date();
+    $("pmDate").textContent = String(d.getDate()).padStart(2, "0") + " " + MONTHS_SHORT[d.getMonth()];
+    $("pmYear").textContent = d.getFullYear();
+  }
+
+  function render(){
+    var T = totalStamps();
+    var cycleIndex = T === 0 ? 0 : Math.floor((T - 1) / 10);
+    var base = cycleIndex * 10;
+
+    // strip
+    var strip = $("strip");
+    strip.innerHTML = "";
+    for(var i = 1; i <= 10; i++){
+      var globalNum = base + i;
+      var earned = globalNum <= T && T > 0;
+      var isMile = (i === 5 || i === 10);
+      var li = document.createElement("li");
+      li.className = "stamp" + (earned ? " earned" : "") + (isMile ? " milestone" : "");
+      var glyph = isMile ? GIFT : GLYPHS[(globalNum - 1) % GLYPHS.length];
+      var rw = isMile ? '<div class="rw">' + (i === 10 ? "50% OFF + SHEET" : "DIE-CUT STICKER") + '</div>' : "";
+      var mo = earned ? '<div class="month">' + monthLabelFor(globalNum) + '</div>' : "";
+      li.innerHTML =
+        '<span class="n">' + String(globalNum).padStart(2, "0") + '</span>' +
+        '<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">' + glyph + '</svg>' +
+        rw + mo +
+        '<span class="frank">' + FRANK + '</span>';
+      li.setAttribute("aria-label",
+        "Stamp " + globalNum + (earned ? ", collected" : ", not yet collected") +
+        (isMile ? ". Reward: " + rewardText(globalNum) : ""));
+      strip.appendChild(li);
+    }
+
+    // tally
+    $("tallyNum").textContent = T;
+    $("tallyMeta").textContent = T === 0 ? "stamps collected"
+      : "stamp" + (T === 1 ? "" : "s") + " · cycle " + (cycleIndex + 1);
+    $("cardName").textContent = state.name ? state.name + "’s card" : "Cheeky Mail Club Stamp Card";
+
+    // controls reflect state
+    $("fName").value = state.name || "";
+    $("fMonth").value = hasStart() ? String(state.m) : "";
+    $("fYear").value = hasStart() ? String(state.y) : "";
+    $("adjVal").textContent = (state.adj || 0) > 0 ? "+" + state.adj : String(state.adj || 0);
+
+    // progress
+    var big = $("progBig"), bar = $("progBar"), next = $("progNext"), claim = $("claim");
+    if(T === 0){
+      big.textContent = "Add your start month to begin your card.";
+      bar.style.width = "0%";
+      next.textContent = "Stamp 5 unlocks your first reward.";
+      claim.classList.add("hidden");
+      return;
+    }
+    var into = ((T - 1) % 5) + 1;          // 1..5 position within current reward run
+    var nextMile = (Math.floor(T / 5) + 1) * 5;
+    var away = nextMile - T;
+    var pct = Math.round((into / 5) * 100);
+    if(T % 5 === 0) pct = 100;
+    bar.style.width = pct + "%";
+    big.textContent = T === 1 ? "1 stamp in the book — welcome aboard!" : T + " stamps in the book.";
+    var nextType = nextMile % 10 === 0
+      ? "50% off the shop + a free sticker sheet"
+      : "a free die-cut sticker";
+    next.textContent = away === 0
+      ? "Reward stamp reached — grab your code below."
+      : away + " more stamp" + (away === 1 ? "" : "s") + " to stamp " + nextMile + ": " + nextType + ".";
+
+    // unclaimed milestone
+    var highestMile = Math.floor(T / 5) * 5;
+    var claimedList = state.claimed || [];
+    if(highestMile >= 5 && claimedList.indexOf(highestMile) === -1){
+      claim.classList.remove("hidden");
+      $("claimReward").textContent = "Stamp " + highestMile + " — " + rewardText(highestMile) + ".";
+      $("claimCode").textContent = claimCode(highestMile);
+      $("claimedChk").checked = false;
+      claim.dataset.mile = highestMile;
+    }else{
+      claim.classList.add("hidden");
+    }
+  }
+
+  // ---- events ----
+  $("fName").addEventListener("input", function(e){
+    state.name = e.target.value.slice(0, 40);
+    persist(); render();
+  });
+  function onDate(){
+    var m = $("fMonth").value, y = $("fYear").value;
+    if(m !== "" && y !== ""){ state.m = +m; state.y = +y; }
+    else { delete state.m; delete state.y; }
+    persist(); render();
+  }
+  $("fMonth").addEventListener("change", onDate);
+  $("fYear").addEventListener("change", onDate);
+
+  $("adjUp").addEventListener("click", function(){
+    state.adj = Math.min(24, (state.adj || 0) + 1); persist(); render();
+  });
+  $("adjDown").addEventListener("click", function(){
+    state.adj = Math.max(-24, (state.adj || 0) - 1); persist(); render();
+  });
+
+  $("claimedChk").addEventListener("change", function(e){
+    if(!e.target.checked) return;
+    var mile = +$("claim").dataset.mile;
+    state.claimed = state.claimed || [];
+    if(state.claimed.indexOf(mile) === -1) state.claimed.push(mile);
+    persist(); render();
+  });
+
+  $("copyBtn").addEventListener("click", function(){
+    var txt = $("claimCode").textContent;
+    var done = function(){ var b = $("copyBtn"); b.textContent = "Copied!"; setTimeout(function(){ b.textContent = "Copy code"; }, 1600); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(done, done);
+    }else{ done(); }
+  });
+
+  $("resetBtn").addEventListener("click", function(){
+    if(!confirm("Clear this stamp card from this browser?")) return;
+    state = {};
+    try{ localStorage.removeItem(KEY); }catch(e){}
+    render();
+  });
+
+  buildControls();
+  render();
+})();
+</script>
