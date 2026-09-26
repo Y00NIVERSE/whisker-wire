@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Whisker Wire</title>
-<meta name="description" content="Fast, unfiltered market information for newer traders, with Tick the cat annotating what matters.">
+<title>Whisker Wire: stock news radar for newer traders</title>
+<meta name="description" content="Whisker Wire reads 80+ independent news feeds, ranks the stories most likely to move a stock, and shows how well each is confirmed. Covers the US, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..500&display=swap">
@@ -50,7 +50,10 @@
   <div class="top-in">
     <a class="brand" href="/" aria-label="Whisker Wire home">
       <span class="brand-cat" data-tick="mini"></span>
-      <span class="brand-name">Whisker Wire</span>
+      <span class="brand-text">
+        <span class="brand-name">Whisker Wire</span>
+        <span class="brand-sub">Stock news radar for newer traders</span>
+      </span>
     </a>
     <nav class="tabs" aria-label="Sections" id="tabs">
       <button class="tab is-on" data-view="wire" aria-pressed="true">Wire</button>
@@ -65,17 +68,34 @@
       <button class="ghost" id="theme" aria-label="Switch color theme">Theme</button>
     </div>
   </div>
+  <div class="markets-wrap">
+    <span class="mk-label" id="mk-label">Market</span>
+    <div class="markets" id="markets" role="group" aria-labelledby="mk-label"></div>
+  </div>
   <div class="strip" id="strip" aria-label="Market snapshot"></div>
 </header>
 
 <main id="main" class="grid">
   <section class="col-main" aria-live="polite">
     <div class="view is-on" id="view-wire">
-      <div class="intro">
-        <p class="eyebrow">The wire</p>
-        <h1>What moved in the last hours, ranked by how much it should matter.</h1>
-        <p class="lede">Twenty-plus independent sources, duplicates merged, nothing hidden. Click any score to see how it was built, and every story shows who else is (or is not) covering it.</p>
-      </div>
+      <section class="hero" aria-labelledby="hero-h">
+        <div class="hero-head">
+          <p class="eyebrow">What is Whisker Wire?</p>
+          <button class="ghost hero-toggle" id="hero-toggle" aria-expanded="true" aria-controls="hero-more">Hide details</button>
+        </div>
+        <h1 id="hero-h">A stock-news radar for newer traders.</h1>
+        <div id="hero-more">
+        <p class="lede">It reads 80+ independent news feeds across ten markets, ranks the stories most likely to move a stock, and shows how well each one is confirmed. Tick the cat then reads any article with you and highlights the key numbers, red flags and jargon in plain English.</p>
+        <ul class="hero-points">
+          <li><b>The Wire</b><span>Today's stories, ranked, with who reported each one.</span></li>
+          <li><b>Value Radar</b><span>Stocks the market has marked down, with the traps.</span></li>
+          <li><b>Tick</b><span>A cat that reads with you and explains what matters.</span></li>
+        </ul>
+        <p class="hero-note">Ten markets: United States, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe. Free, private, runs on your computer. Education, not financial advice.</p>
+        </div>
+      </section>
+      <h2 class="section-h" id="wire-top">Today's wire: <span id="mkt-name">United States</span></h2>
+      <p class="mkt-note small" id="mkt-note" hidden></p>
       <section class="start" id="start" aria-label="Start here">
         <p class="eyebrow">Start here: the top three, in plain English</p>
         <ol class="start-list" id="start-list"></ol>
@@ -87,7 +107,7 @@
           <button class="ghost" id="btn-how" aria-expanded="false" aria-controls="panel">How scoring works</button>
           <form class="watch" id="watch-form" autocomplete="off">
             <label for="watch-in" class="sr">Add a ticker to your watchlist</label>
-            <input id="watch-in" placeholder="Add ticker, e.g. NVDA" maxlength="6" spellcheck="false">
+            <input id="watch-in" placeholder="Add ticker, e.g. NVDA or 0700.HK" maxlength="14" spellcheck="false">
             <button class="ghost" type="submit">Watch</button>
           </form>
         </div>
@@ -108,7 +128,7 @@
             <li><b>Watch</b> 5 to 7 points, or 8 or more with only one lesser-known outlet so far.</li>
             <li><b>Single source</b> Only one outlet reported it. Wait for a second, or the filing itself.</li>
             <li><b>Corroborated</b> Two or more different outlets reported the same story.</li>
-            <li><b>Not in big headlines</b> A strong signal that CNBC, MarketWatch, Yahoo Finance and Nasdaq are not carrying yet. Early, but unconfirmed.</li>
+            <li><b>Not in big headlines</b> A strong signal that the big outlets (CNBC, Reuters, SCMP, BBC and similar) are not carrying yet. Early, but unconfirmed.</li>
           </ul>
           <p class="small">Click any story's score to see exactly how it was built.</p>
         </div>
@@ -121,6 +141,7 @@
       </section>
       <div class="chips watching" id="watching" aria-label="Your watchlist"></div>
       <ol class="wire" id="wire-list"></ol>
+      <nav class="pager" id="wire-pager" aria-label="Wire pages" hidden></nav>
       <p class="empty" id="wire-empty" hidden>Nothing matches those filters right now. Tick is napping.</p>
     </div>
 
@@ -132,6 +153,7 @@
       </div>
       <div class="chips" id="radar-filters" role="group" aria-label="Filter radar"></div>
       <div class="radar" id="radar-list"></div>
+      <nav class="pager" id="radar-pager" aria-label="Value Radar pages" hidden></nav>
     </div>
 
     <div class="view" id="view-filings">
@@ -171,6 +193,7 @@
       <button id="mode-paste">Paste text or link</button>
     </div>
     <div class="bar-right">
+      <span class="pg-tag" id="rpage-tag" aria-live="polite"></span>
       <label class="switch"><input type="checkbox" id="cat-on" checked><span>Tick on</span></label>
     </div>
   </div>
@@ -184,6 +207,7 @@
     <section class="take" id="take" hidden></section>
     <div class="reader-body" id="reader-body">
       <article class="article" id="article" tabindex="-1"></article>
+      <nav class="rpager" id="rpager" aria-label="Article pages" hidden></nav>
     </div>
   </div>
   <div class="cat" id="cat" data-state="idle" aria-live="polite" hidden>

@@ -10,17 +10,14 @@ Python 3.10+, standard library only. No accounts, no analytics, no request loggi
 
 ## What it does
 
-- **The Wire**: about 22 independent sources (mainstream, analyst, wire, independent, government, community, plus targeted searches for insider buys, short reports, activists, guidance changes, FDA news). Duplicates merge into one story that keeps every publisher. Each story is scored, labelled *Corroborated* or *Single source*, and tagged *Not in big headlines* when it has a strong signal that CNBC, MarketWatch, Yahoo Finance and Nasdaq are not carrying yet.
-  - **Click any score** to see exactly how its points were built.
-  - **Urgent has to be confirmed**: 8 or more points and two or more outlets (or one major or official source). A single lesser-known outlet stays at Watch until confirmed.
-  - **Sources and How scoring works** are buttons above the wire (and a nav tab), so they are one tap away on any screen size.
-  - Jargon (P/E, Form 4, guidance...) has a dotted underline and a plain-English tooltip everywhere.
-  - Insider and filing stories link straight to the company's filings on SEC.gov.
-  - On phones: a "Start here" strip with the top three in plain English, and compact cards (tap More for the rest).
-- **Value Radar**: Yahoo's undervalued and crowded-short screens re-scored 0 to 100, with plain-English "why it looks cheap" and "how it could be a trap" for every pick.
-- **Filings**: insider open-market purchases (Form 4) and Schedule 13D stakes straight from the SEC. One in-app step to switch on, see below.
+- **Ten markets**, chosen from the pills under the logo: United States, China, Hong Kong, Singapore, United Kingdom, Japan, India, Australia, Canada and Europe. Each has its own news feeds (81 in total: 42 outlets plus 39 targeted searches), index strip, tickers in the local format (`0700.HK`, `D05.SI`, `VOD.L`), prices in the local currency, and Value Radar. Your choice is remembered and can be shared as a link (`?market=hk`). China's state media outlets are labelled so you can weigh them or switch them off.
+- **The Wire**: mainstream, analyst, wire, independent, government, community and state-media feeds, plus targeted searches for insider buys, short reports, activists, guidance changes and FDA news. Duplicates merge into one story that keeps every publisher. Each story is scored, labelled *Corroborated* or *Single source*, and tagged *Not in big headlines* when it has a strong signal that the big outlets are not carrying yet. Searches must mention something local in the headline, so a London trust's buyback notice cannot leak into the Hong Kong wire.
+  - **Short pages**: the wire, Value Radar, filings and the reader all use numbered pages instead of one long scroll. In the reader, Tick's clues carry across pages (Next clue turns the page for you); arrow keys turn pages too.
+  - **What it is, at a glance**: a plain-English intro sits at the top of the first page (collapsible; the headline always stays).
+- **Value Radar**: for the US, Yahoo's undervalued and crowded-short screens; for every other market, the largest companies on the local exchanges (via Yahoo's screener). All are re-scored 0 to 100 with plain-English "why it looks cheap" and "how it could be a trap" for every pick, in the local currency.
+- **Filings**: for the US, insider open-market purchases (Form 4) and Schedule 13D stakes straight from the SEC (one in-app step to switch on, see below). For other markets, links to the official announcement portals (HKEXnews, SGX, London RNS, CNINFO, TDnet, NSE/BSE, ASX, SEDAR+ and more), since only the US filings are read automatically.
 - **Tick**: open any story (or paste text or a link). Google News links are decoded so the publisher's page opens; paywalled pages fall back to the headline plus paste. She highlights bullish clues, red flags, key numbers, catalysts and fine print, follows you as you scroll, explains each in beginner language, and underlines jargon. Keys: `n` next, `p` back, `Esc` close. Tap Tick to fold her note. **Serious mode** (in Sources) hides the mascot artwork but keeps the notes.
-- **Track record**: every Urgent or Watch story that names a stock is logged with its price and the S&P 500's, then measured 1 and 5 trading days later. It shows results only after 20 measured stories, and says so plainly until then. Stored in `data/track.db` on your machine.
+- **Track record** (US stories only, since it is measured against the S&P 500): every Urgent or Watch story that names a stock is logged with its price and the S&P 500's, then measured 1 and 5 trading days later. It shows results only after 20 measured stories, and says so plainly until then. Stored in `data/track.db` on your machine.
 
 ## Turn on SEC filings
 
@@ -35,14 +32,15 @@ Urgent is 8 or more points and confirmed; Watch is 5 to 7 (or 8 or more but unco
 
 - **Public information is priced in fast.** This finds things earlier than a headline scan, not before professionals with faster feeds. It is not a promise of returns. Never trade on non-public information: that is illegal.
 - **Tick reads keywords and numbers, not meaning.** She will miss subtle things and can highlight a sentence that is not important. Verify before acting.
-- **Some pages cannot be read in the app**: paywalled, script-rendered, or publishers that block automated readers. Tick then analyses the headline and asks you to paste the text. Google News links are decoded through an unofficial route that Google could change.
+- **Some pages cannot be read in the app**: paywalled, script-rendered, or publishers that block automated readers. In a test of 54 stories across the non-US markets 43 opened; Japan is the weakest (The Japan Times refuses automated readers), so Japanese stories often fall back to the headline plus paste. Tick then analyses the headline and asks you to paste the text. Google News links are decoded through an unofficial route that Google could change.
+- Non-US screens need a short-lived Yahoo session that is fetched automatically; it and every Yahoo endpoint here are unofficial and may change. Europe combines several exchanges and includes some US names that also trade there; London prices are in pence.
 - Yahoo endpoints are unofficial and may change. Feeds can be delayed. Any single source can be down (see Source health in the Sources panel).
 - Education, not financial advice.
 
 ## Development
 
 ```
-python -m unittest discover -s whisker-wire/tests -v     # offline tests (32)
+python -m unittest discover -s whisker-wire/tests -v     # offline tests (50)
 ```
 
 Design rules are in `DESIGN.md` (awesome-design-md format, with taste-skill dials).
