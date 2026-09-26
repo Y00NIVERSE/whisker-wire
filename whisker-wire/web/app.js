@@ -2,6 +2,7 @@
 // textContent, never innerHTML, and links are restricted to http(s).
 import { analyze, glossSegments, CATS, LEAN_TEXT } from "./cat.js";
 
+const BASE_TITLE = document.title;   // the full page title from the HTML, restored after alerts
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
@@ -35,11 +36,19 @@ async function api(path) {
   return j;
 }
 
+const CUR_SYM = { USD: "$", HKD: "HK$", SGD: "S$", GBP: "£", CNY: "¥", JPY: "¥", INR: "₹", AUD: "A$", CAD: "C$", EUR: "€", CHF: "CHF ", SEK: "kr ", DKK: "kr ", NOK: "kr " };
 const fmt = {
   price: (n) => (n == null ? "n/a" : n >= 1000 ? n.toLocaleString("en-US", { maximumFractionDigits: 0 }) : n.toFixed(2)),
   pct: (n, d = 2) => (n == null ? "n/a" : (n > 0 ? "+" : "") + n.toFixed(d) + "%"),
   usd: (n) => (n >= 1e9 ? "$" + (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "K" : "$" + Math.round(n)),
   x: (n, d = 1) => (n == null ? "n/a" : n.toFixed(d)),
+  // Prices come in each market's own currency. London quotes in pence.
+  px: (n, cur = "USD") => (n == null ? "n/a" : cur === "GBp" ? n.toLocaleString("en-GB", { maximumFractionDigits: 1 }) + "p" : (CUR_SYM[cur] ?? cur + " ") + fmt.price(n)),
+  cap: (n, cur = "USD") => {
+    if (!n) return "n/a";
+    const sym = cur === "GBp" ? "£" : (CUR_SYM[cur] ?? cur + " ");
+    return sym + (n >= 1e12 ? (n / 1e12).toFixed(1) + "T" : n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(0) + "M" : Math.round(n).toLocaleString("en-US"));
+  },
 };
 const ago = (ts) => {
   const m = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
@@ -65,7 +74,7 @@ const SEC_FORM = { "insider-buy": ["4", "Form 4 insider trades"], "insider-sell"
 const SEC_8K = new Set(["guidance-up", "guidance-down", "beat", "miss", "distress", "exec-exit", "probe", "takeover", "buyback", "fda", "contract", "dividend", "dilution", "layoffs", "recall", "halt"]);
 function secLink(s) {
   const tk = s.tickers[0];
-  if (!tk || !/^[A-Z.]{1,6}$/.test(tk)) return null;
+  if (state.market !== "us" || !tk || !/^[A-Z]{1,5}$/.test(tk)) return null;
   const ids = s.signals.map((g) => g.id);
   const hit = ids.find((i) => SEC_FORM[i]);
   const [form, label] = hit ? SEC_FORM[hit] : ids.some((i) => SEC_8K.has(i)) ? ["8-K", "8-K company announcements"] : [null];
@@ -76,13 +85,17 @@ function secLink(s) {
 const isGoogle = (u) => { try { return new URL(u).hostname === "news.google.com"; } catch { return false; } };
 
 /* ------------------------------------------------------------ state */
+const PER = { wire: 10, radar: 5, buys: 10, stakes: 10 };   // items per page: short pages instead of one long scroll
 const state = {
-  view: "wire", filter: "all", ticker: null, shown: 40,
+  view: "wire", filter: "all", ticker: null,
+  market: "us", markets: [], page: { wire: 1, radar: 1, buys: 1, stakes: 1 },
   watch: new Set(store.get("watch", [])),
-  kinds: new Set(store.get("kinds", [])), allKinds: new Set(),
-  feed: null, picks: null, radarList: "all", seen: null, openSrcs: new Set(),
+  off: new Set(store.get("kindsOff", [])), allKinds: new Set(),   // source types switched off; new types default to on
+  feed: null, picks: null, radarList: "all", seen: null, openSrcs: new Set(), filings: null,
   signals: null, showSells: false, openCalc: new Set(),
 };
+const kindOn = (k) => !state.off.has(k);
+const marketInfo = () => state.markets.find((m) => m.id === state.market) || { id: "us", name: "United States", filings: [], note: "" };
 
 /* ------------------------------------------------------------ Tick drawings */
 function mountTicks() {
@@ -114,16 +127,96 @@ function setView(v) {
 $$(".tab[data-view]").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
 $("#open-reader").addEventListener("click", () => openReader({ paste: true }));
 
-/* ------------------------------------------------------------ market strip */
-async function loadQuotes() {
+/* ------------------------------------------------------------ markets and the index strip */
+function renderMarkets() {
+  fill($("#markets"), ...state.markets.map((m) => h("button", {
+    class: "mkt" + (m.id === state.market ? " is-on" : ""), "aria-pressed": String(m.id === state.market), title: m.name,
+    onclick: () => setMarket(m.id),
+  }, h("span", { class: "mk-short", text: m.short }), h("span", { class: "mk-name", text: m.name }))));
+  $("#mkt-name").textContent = marketInfo().name;
+  // On a phone the row scrolls sideways: keep the selected market in view so people can see where they are.
+  const row = $("#markets"), on = $("#markets .mkt.is-on");
+  if (on) row.scrollTo({ left: Math.max(0, on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2) });
+  const note = $("#mkt-note");
+  note.textContent = marketInfo().note || "";
+  note.hidden = !marketInfo().note;
+}
+
+function setMarket(id) {
+  if (id === state.market) return;
+  state.market = id;
+  store.set("market", id);
+  try { history.replaceState(null, "", id === "us" ? location.pathname : "?market=" + id); } catch { /* file or sandbox */ }
+  Object.assign(state, { feed: null, seen: null, newIds: new Set(), picks: null, filings: null, filter: "all", ticker: null, radarList: "all", allKinds: new Set() });
+  state.page = { wire: 1, radar: 1, buys: 1, stakes: 1 };
+  renderMarkets();
+  fill($("#wire-list"), h("li", { class: "empty", text: `Loading ${marketInfo().name} stories…` }));
+  $("#wire-pager").hidden = true; $("#wire-empty").hidden = true;
+  fill($("#strip"));
+  fill($("#top3")); fill($("#start-list"));
+  loadFeed(); loadQuotes();
+  if (state.view === "radar") loadRadar();
+  if (state.view === "filings") loadFilings();
+}
+
+async function initMarket() {
   try {
-    const { quotes } = await api("/api/quotes");
-    const box = $("#strip");
-    fill(box, ...quotes.filter((q) => q.price != null).map((q) =>
+    state.markets = (await api("/api/markets")).markets;
+    const want = new URLSearchParams(location.search).get("market") || store.get("market", "us");
+    state.market = state.markets.some((m) => m.id === want) ? want : "us";
+  } catch { state.markets = []; }
+  renderMarkets();
+}
+
+async function loadQuotes() {
+  const mk = state.market;
+  try {
+    const { quotes } = await api("/api/quotes?market=" + mk);
+    if (mk !== state.market) return;   // the user switched markets while this was loading
+    fill($("#strip"), ...quotes.filter((q) => q.price != null).map((q) =>
       h("div", { class: "q" }, h("b", { text: q.label }), h("span", { text: fmt.price(q.price) }),
-        h("span", { class: dirClass(q.chg, q.symbol === "^VIX"), text: fmt.pct(q.chg) }))));
+        h("span", { class: q.symbol.endsWith("=X") ? "flat" : dirClass(q.chg, q.symbol === "^VIX"), text: fmt.pct(q.chg) }))));
   } catch { /* strip is optional */ }
 }
+
+// The headline always says what the site is; the detail can be tucked away by people who already know.
+const heroMore = $("#hero-more"), heroBtn = $("#hero-toggle");
+function setHero(open) {
+  heroMore.hidden = !open;
+  heroBtn.setAttribute("aria-expanded", String(open));
+  heroBtn.textContent = open ? "Hide details" : "What is this?";
+  store.set("heroOpen", open);
+}
+setHero(store.get("heroOpen", true));
+heroBtn.addEventListener("click", () => setHero(heroMore.hidden));
+
+/* ------------------------------------------------------------ pagination */
+function pageNumbers(cur, pages) {
+  const keep = new Set([1, pages, cur - 1, cur, cur + 1]);
+  const out = [];
+  for (let n = 1; n <= pages; n++) {
+    if (keep.has(n)) out.push(n);
+    else if (out[out.length - 1] !== "…") out.push("…");
+  }
+  return out;
+}
+
+// Short numbered pages instead of one endless scroll. onGo re-renders the list.
+function renderPager(box, total, key, per, onGo) {
+  const pages = Math.max(1, Math.ceil(total / per));
+  if (pages <= 1) { fill(box); box.hidden = true; return; }
+  box.hidden = false;
+  const cur = state.page[key];
+  const go = (n) => { state.page[key] = Math.min(pages, Math.max(1, n)); onGo(); };
+  fill(box,
+    h("span", { class: "pg-range", text: `Showing ${(cur - 1) * per + 1} to ${Math.min(total, cur * per)} of ${total}` }),
+    h("div", { class: "pg-btns" },
+      h("button", { class: "pg", disabled: cur === 1, "aria-label": "Previous page", onclick: () => go(cur - 1) }, "Previous"),
+      pageNumbers(cur, pages).map((n) => (n === "…" ? h("span", { class: "pg-gap", text: "…" })
+        : h("button", { class: "pg" + (n === cur ? " is-on" : ""), "aria-current": n === cur ? "page" : null, "aria-label": "Page " + n, onclick: () => go(n) }, String(n)))),
+      h("button", { class: "pg", disabled: cur === pages, "aria-label": "Next page", onclick: () => go(cur + 1) }, "Next")));
+}
+const toTopOf = (el) => el.scrollIntoView({ block: "start", behavior: "smooth" });
 
 /* ------------------------------------------------------------ the wire */
 const FILTERS = [
@@ -140,20 +233,20 @@ function visibleStories() {
   if (!state.feed) return [];
   const f = FILTERS.find((x) => x[0] === state.filter)[2];
   return state.feed.stories.filter((s) =>
-    s.kinds.some((k) => state.kinds.has(k)) && f(s) && (!state.ticker || s.tickers.includes(state.ticker)));
+    s.kinds.some(kindOn) && f(s) && (!state.ticker || s.tickers.includes(state.ticker)));
 }
 
 function renderFilters() {
-  const base = state.feed ? state.feed.stories.filter((s) => s.kinds.some((k) => state.kinds.has(k))) : [];
+  const base = state.feed ? state.feed.stories.filter((s) => s.kinds.some(kindOn)) : [];
   fill($("#filters"), ...FILTERS.map(([id, label, fn]) =>
     h("button", { class: "chip" + (state.filter === id ? " is-on" : ""), "aria-pressed": state.filter === id,
-      onclick: () => { state.filter = id; state.shown = 40; renderWire(); } },
+      onclick: () => { state.filter = id; state.page.wire = 1; renderWire(); } },
     label, h("span", { class: "n", text: base.filter(fn).length }))));
 }
 
 function renderWatching() {
   const tags = [...state.watch].map((t) => h("button", { class: "wtag", title: "Remove " + t, onclick: () => { state.watch.delete(t); store.set("watch", [...state.watch]); renderWire(); } }, t));
-  if (state.ticker) tags.unshift(h("button", { class: "wtag", title: "Clear ticker filter", onclick: () => { state.ticker = null; renderWire(); } }, "Showing " + state.ticker));
+  if (state.ticker) tags.unshift(h("button", { class: "wtag", title: "Clear ticker filter", onclick: () => { state.ticker = null; state.page.wire = 1; renderWire(); } }, "Showing " + state.ticker));
   if (state.watch.size) tags.unshift(h("span", { class: "wlabel", text: "Watching" }));
   fill($("#watching"), ...tags);
 }
@@ -205,14 +298,14 @@ function storyEl(s, isNew) {
         s.corroborated
           ? tip("tag-corr", "Corroborated", "Two or more different outlets reported this.")
           : tip("tag-single", "Single source", "Only one outlet reported this so far. Unconfirmed: wait for a second outlet or the filing."),
-        s.overlooked && tip("tag-ovr", "Not in big headlines", "A strong signal that CNBC, MarketWatch, Yahoo Finance and Nasdaq are not carrying yet. Early, but unconfirmed: check before acting."),
+        s.overlooked && tip("tag-ovr", "Not in big headlines", "A strong signal that the big outlets (CNBC, Reuters, SCMP, BBC and similar) are not carrying yet. Early, but unconfirmed: check before acting."),
         mine && h("span", { class: "tagx tag-mine", text: "Your ticker" })),
       h("h3", {}, h("a", { href: s.link }, s.title)),
       calc,
       s.summary && h("p", { class: "sum" }, glossNodes(s.summary.length > 260 ? s.summary.slice(0, 257) + "…" : s.summary, seen)),
       s.why && h("p", { class: "why" }, h("b", { text: "Why it matters" }), glossNodes(s.why, seen)),
       h("div", { class: "tags" },
-        s.tickers.map((t) => h("button", { class: "tk", title: "Show only " + t, onclick: () => { state.ticker = t; state.shown = 40; setView("wire"); renderWire(); } }, t)),
+        s.tickers.map((t) => h("button", { class: "tk", title: "Show only " + t, onclick: () => { state.ticker = t; state.page.wire = 1; setView("wire"); renderWire(); } }, t)),
         s.signals.map((g) => h("span", { class: "sg sg-" + g.dir, text: g.label }))),
       h("div", { class: "acts" },
         h("button", { class: "read", onclick: () => openReader({ story: s }) }, "Read with Tick"),
@@ -228,14 +321,12 @@ function storyEl(s, isNew) {
 function renderWire() {
   renderFilters(); renderWatching();
   const list = visibleStories();
-  const box = $("#wire-list");
+  const pages = Math.max(1, Math.ceil(list.length / PER.wire));
+  state.page.wire = Math.min(state.page.wire, pages);
   const newIds = state.newIds || new Set();
-  const nodes = list.slice(0, state.shown).map((s) => storyEl(s, newIds.has(s.id)));
-  if (list.length > state.shown) {
-    nodes.push(h("li", { class: "story", style: { display: "block" } },
-      h("button", { class: "ghost", onclick: () => { state.shown += 40; renderWire(); } }, `Show ${Math.min(40, list.length - state.shown)} more`)));
-  }
-  fill(box, ...nodes);
+  const from = (state.page.wire - 1) * PER.wire;
+  fill($("#wire-list"), ...list.slice(from, from + PER.wire).map((s) => storyEl(s, newIds.has(s.id))));
+  renderPager($("#wire-pager"), list.length, "wire", PER.wire, () => { renderWire(); toTopOf($("#wire-top")); });
   $("#wire-empty").hidden = list.length > 0;
   $("#wire-empty").textContent = emptyText();
   renderTop3();
@@ -252,7 +343,7 @@ function emptyText() {
   return "Nothing matches those filters right now. Tick is napping.";
 }
 
-const topStories = () => state.feed.stories.filter((s) => s.kinds.some((k) => state.kinds.has(k))).slice(0, 3);
+const topStories = () => state.feed.stories.filter((s) => s.kinds.some(kindOn)).slice(0, 3);
 
 function renderTop3() {
   if (!state.feed) return;
@@ -269,10 +360,10 @@ function renderTop3() {
 
 function renderKinds() {
   const kinds = [...state.allKinds].sort();
-  $("#src-count").textContent = `${state.kinds.size}/${state.allKinds.size}`;
+  $("#src-count").textContent = `${kinds.filter(kindOn).length}/${kinds.length}`;
   fill($("#kinds"), ...kinds.map((k) => h("button", {
-    class: "chip" + (state.kinds.has(k) ? " is-on" : ""), "aria-pressed": state.kinds.has(k),
-    onclick: () => { state.kinds.has(k) ? state.kinds.delete(k) : state.kinds.add(k); store.set("kinds", [...state.kinds]); renderKinds(); renderWire(); },
+    class: "chip" + (kindOn(k) ? " is-on" : ""), "aria-pressed": String(kindOn(k)),
+    onclick: () => { kindOn(k) ? state.off.add(k) : state.off.delete(k); store.set("kindsOff", [...state.off]); state.page.wire = 1; renderKinds(); renderWire(); },
   }, k)));
 }
 
@@ -282,9 +373,10 @@ function renderHealth(feed) {
 }
 
 async function loadFeed() {
-  const live = $("#live");
+  const live = $("#live"), mk = state.market;
   try {
-    const feed = await api("/api/feed");
+    const feed = await api("/api/feed?market=" + mk);
+    if (mk !== state.market) return;   // the user switched markets while this was loading
     const first = !state.seen;
     const ids = new Set(feed.stories.map((s) => s.id));
     if (first) { state.seen = ids; state.newIds = new Set(); }
@@ -296,13 +388,12 @@ async function loadFeed() {
     }
     state.feed = feed;
     feed.stories.forEach((s) => s.kinds.forEach((k) => state.allKinds.add(k)));
-    if (!state.kinds.size) { state.kinds = new Set(state.allKinds); }
-    else { for (const k of state.allKinds) if (!store.get("kinds", null)) state.kinds.add(k); }
     renderKinds(); renderWire(); renderHealth(feed);
     live.className = "live ok";
     $("#updated").textContent = "Live · " + feed.stories.length + " stories · " + ago(feed.generated);
     $("#updated").dataset.ts = feed.generated;
   } catch (e) {
+    if (mk !== state.market) return;
     live.className = "live bad";
     $("#updated").textContent = "Offline: " + e.message;
   }
@@ -317,16 +408,16 @@ function announce(fresh) {
   t.onclick = () => { t.hidden = true; openReader({ story: top }); };
   clearTimeout(announce.t);
   announce.t = setTimeout(() => { t.hidden = true; }, 9000);
-  document.title = `(${fresh.length}) Whisker Wire`;
+  document.title = `(${fresh.length}) ${BASE_TITLE}`;
   if (store.get("alerts", false) && "Notification" in window && Notification.permission === "granted" && fresh.some((s) => s.level === "urgent")) {
     try { new Notification("Whisker Wire: urgent", { body: fresh.find((s) => s.level === "urgent").title }); } catch { /* ignore */ }
   }
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) { document.title = "Whisker Wire"; loadFeed(); loadQuotes(); } });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { document.title = BASE_TITLE; loadFeed(); loadQuotes(); } });
 
 $("#watch-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const v = $("#watch-in").value.trim().toUpperCase().replace(/[^A-Z.]/g, "");
+  const v = $("#watch-in").value.trim().toUpperCase().replace(/[^A-Z0-9.&-]/g, "");
   if (!v) return flash("Type a ticker symbol first, like NVDA.");
   $("#watch-in").value = "";
   if (state.watch.has(v)) return flash(`${v} is already on your watchlist.`);
@@ -403,13 +494,19 @@ function renderTrack(box, t) {
 }
 
 /* ------------------------------------------------------------ value radar */
-const RADAR_LISTS = [["all", "All"], ["undervalued_large_caps", "Large caps"], ["undervalued_growth_stocks", "Growth"], ["most_shorted_stocks", "Crowded shorts"]];
+const radarLists = () => (state.market === "us"
+  ? [["all", "All"], ["undervalued_large_caps", "Large caps"], ["undervalued_growth_stocks", "Growth"], ["most_shorted_stocks", "Crowded shorts"]]
+  : [["all", "All"], ["large", "Large caps"], ["mid", "Mid and small caps"]]);
 
 async function loadRadar() {
-  const box = $("#radar-list");
+  const box = $("#radar-list"), mk = state.market;
   fill(box, h("p", { class: "empty", text: "Tick is checking the numbers…" }));
-  try { state.picks = (await api("/api/undervalued")).picks; renderRadar(); }
-  catch (e) { fill(box, h("p", { class: "empty", text: "Could not load the screener: " + e.message })); }
+  try {
+    const d = await api("/api/undervalued?market=" + mk);
+    if (mk !== state.market) return;
+    state.picks = d.picks;
+    renderRadar();
+  } catch (e) { if (mk === state.market) fill(box, h("p", { class: "empty", text: "Could not load the screener: " + e.message })); }
 }
 
 function sparkline(closes) {
@@ -437,7 +534,7 @@ function pickEl(p) {
   return h("article", { class: "pick" },
     h("div", { class: "pk-head" },
       h("span", { class: "pk-sym", text: p.symbol }), h("span", { class: "pk-name", text: p.name }),
-      h("span", { class: "pk-px" }, "$" + fmt.price(p.price) + " ", h("span", { class: dirClass(p.chg), text: fmt.pct(p.chg) })),
+      h("span", { class: "pk-px" }, fmt.px(p.price, p.currency) + " ", h("span", { class: dirClass(p.chg), text: fmt.pct(p.chg) })),
       h("span", { class: "pk-list", text: p.list_label })),
     h("div", { class: "scoreblock" },
       h("div", { class: "n" }, String(p.score), h("small", { text: "/100" })),
@@ -445,11 +542,11 @@ function pickEl(p) {
       h("div", { class: "cap", text: tier === "hi" ? "Strong value case" : tier === "mid" ? "Worth a look" : "Weak case" })),
     h("div", {}, h("div", { class: "metrics" },
       metric("Fwd P/E", fmt.x(p.fpe)), metric("P/B", p.pb != null && p.pb < 0 ? "negative" : fmt.x(p.pb)), metric("Off 52-week high", fmt.pct(p.off_high, 0)),
-      metric("Mkt cap", p.mcap ? fmt.usd(p.mcap) : "n/a"), metric("Analysts", p.rating ? p.rating.split(" - ")[1] || p.rating : "n/a")),
+      metric("Mkt cap", fmt.cap(p.mcap, p.currency)), metric("Analysts", p.rating ? p.rating.split(" - ")[1] || p.rating : "n/a")),
     h("div", { class: "range", role: "img", "aria-label": `Price sits ${pos.toFixed(0)} percent of the way up its 52 week range` },
       h("i", { style: { left: pos + "%" } }),
-      h("span", { style: { left: "0" }, text: "$" + fmt.price(p.lo) }),
-      h("span", { style: { right: "0" }, text: "$" + fmt.price(p.hi) }))),
+      h("span", { style: { left: "0" }, text: fmt.px(p.lo, p.currency) }),
+      h("span", { style: { right: "0" }, text: fmt.px(p.hi, p.currency) }))),
     h("div", { class: "two" },
       h("div", { class: "g" }, h("h4", { text: "Why it looks cheap" }), h("ul", {}, p.good.length ? p.good.map(bullet) : h("li", { text: "Few classic value signals. Its score comes from small pieces." }))),
       h("div", { class: "w" }, h("h4", { text: "How it could be a trap" }), h("ul", {}, p.warn.map(bullet)))),
@@ -467,16 +564,20 @@ function pickEl(p) {
           } catch (err) { fill(detail, h("p", { class: "small", text: "Could not load: " + err.message })); }
         }
       } }, "Chart and news"),
-      h("button", { onclick: () => { state.ticker = p.symbol; state.filter = "all"; setView("wire"); renderWire(); } }, "Filter the wire"),
+      h("button", { onclick: () => { state.ticker = p.symbol; state.filter = "all"; state.page.wire = 1; setView("wire"); renderWire(); } }, "Filter the wire"),
       h("button", { onclick: () => { state.watch.add(p.symbol); store.set("watch", [...state.watch]); flash(p.symbol + " added to your watchlist."); renderWire(); } }, "Watch")),
     detail);
 }
 
 function renderRadar() {
-  fill($("#radar-filters"), ...RADAR_LISTS.map(([id, label]) =>
-    h("button", { class: "chip" + (state.radarList === id ? " is-on" : ""), "aria-pressed": state.radarList === id, onclick: () => { state.radarList = id; renderRadar(); } }, label)));
+  fill($("#radar-filters"), ...radarLists().map(([id, label]) =>
+    h("button", { class: "chip" + (state.radarList === id ? " is-on" : ""), "aria-pressed": String(state.radarList === id), onclick: () => { state.radarList = id; state.page.radar = 1; renderRadar(); } }, label)));
   const rows = state.picks.filter((p) => state.radarList === "all" || p.list === state.radarList);
-  fill($("#radar-list"), ...(rows.length ? rows.map(pickEl) : [h("p", { class: "empty", text: "Nothing in this list right now." })]));
+  const pages = Math.max(1, Math.ceil(rows.length / PER.radar));
+  state.page.radar = Math.min(state.page.radar, pages);
+  const from = (state.page.radar - 1) * PER.radar;
+  fill($("#radar-list"), ...(rows.length ? rows.slice(from, from + PER.radar).map(pickEl) : [h("p", { class: "empty", text: "Nothing in this list right now." })]));
+  renderPager($("#radar-pager"), rows.length, "radar", PER.radar, () => { renderRadar(); toTopOf($("#view-radar")); });
 }
 
 /* ------------------------------------------------------------ filings */
@@ -496,34 +597,60 @@ function secSetup() {
     h("p", { class: "small", text: "Prefer to do it by hand? Create whisker-wire/sec_contact.txt containing one line: Your Name you@example.com" }));
 }
 
+function renderPortals(box) {
+  const m = marketInfo();
+  fill(box, h("div", { class: "portals" },
+    h("h2", { class: "subhead", text: `Where ${m.name} companies file` }),
+    h("p", { class: "small", text: "Whisker Wire reads US filings from the SEC automatically. For this market, the official announcements, including director and insider dealings, live at these sites. Open them to check any story at its source." }),
+    m.note && h("p", { class: "small", text: m.note }),
+    h("ul", { class: "portal-list" }, m.filings.map((f) => h("li", {}, h("a", { href: f.url }, f.name), h("span", { text: f.what })))),
+    h("button", { class: "ghost", onclick: () => setMarket("us") }, "Switch to US insider filings")));
+}
+
 async function loadFilings() {
   const box = $("#filings-body");
+  if (state.market !== "us") return renderPortals(box);
   fill(box, h("p", { class: "empty", text: "Asking the SEC…" }));
-  let d;
-  try { d = await api("/api/filings"); } catch (e) { return fill(box, h("p", { class: "empty", text: "Could not load filings: " + e.message })); }
+  try { state.filings = await api("/api/filings"); } catch (e) { return fill(box, h("p", { class: "empty", text: "Could not load filings: " + e.message })); }
+  renderFilings();
+}
+
+function renderFilings() {
+  const box = $("#filings-body"), d = state.filings;
+  if (!d) return;
   if (!d.configured) return fill(box, secSetup());
   const buys = d.insider.filter((r) => r.buy_usd > 0);
   const sells = d.insider.filter((r) => r.sell_usd > 0 && !r.buy_usd);
   const cluster = {};
   buys.forEach((r) => { (cluster[r.symbol] ||= new Set()).add(r.insider); });
   const row = (r, buy) => h("div", { class: "frow" },
-    h("button", { class: "tk", onclick: () => { state.ticker = r.symbol; setView("wire"); renderWire(); } }, r.symbol || "?"),
+    h("button", { class: "tk", onclick: () => { state.ticker = r.symbol; state.page.wire = 1; setView("wire"); renderWire(); } }, r.symbol || "?"),
     h("div", {}, h("div", { class: "who", text: r.insider }),
       h("div", { class: "sub" }, `${r.role} at ${r.company} · ${ago(r.ts)} · `, h("a", { href: r.link }, "filing"),
         buy && cluster[r.symbol] && cluster[r.symbol].size > 1 ? "  " : "", buy && cluster[r.symbol] && cluster[r.symbol].size > 1 && h("span", { class: "tagx tag-corr", text: cluster[r.symbol].size + " insiders buying" }))),
     h("div", { class: "amt " + (buy ? "buy" : "sell"), text: fmt.usd(buy ? r.buy_usd : r.sell_usd) }));
-  fill(box, 
+  const slice = (arr, key) => arr.slice((Math.min(state.page[key], Math.max(1, Math.ceil(arr.length / PER[key]))) - 1) * PER[key]).slice(0, PER[key]);
+  const buyPager = h("nav", { class: "pager", "aria-label": "Insider buy pages", hidden: true });
+  const stakePager = h("nav", { class: "pager", "aria-label": "Stake filing pages", hidden: true });
+  state.page.buys = Math.min(state.page.buys, Math.max(1, Math.ceil(buys.length / PER.buys)));
+  state.page.stakes = Math.min(state.page.stakes, Math.max(1, Math.ceil(d.stakes.length / PER.stakes)));
+  fill(box,
     h("h2", { class: "subhead", text: "Insiders buying with their own cash" }),
     h("p", { class: "small" }, glossNodes("Open-market purchases (code P) from the latest Form 4 filings. Several insiders at one company is the strongest version.")),
-    ...(buys.length ? buys.map((r) => row(r, true)) : [h("p", { class: "empty", text: d.insider_error ? "The SEC did not answer (" + d.insider_error + "). Try again shortly." : "No open-market insider buys in the latest batch." })]),
+    ...(buys.length ? slice(buys, "buys").map((r) => row(r, true)) : [h("p", { class: "empty", text: d.insider_error ? "The SEC did not answer (" + d.insider_error + "). Try again shortly." : "No open-market insider buys in the latest batch." })]),
+    buyPager,
     h("h2", { class: "subhead", text: "Big holders and activists (Schedule 13D)" }),
-    ...(d.stakes.length ? d.stakes.map((r) => h("div", { class: "frow" }, h("span", {}), h("div", {}, h("a", { class: "who", href: r.link }, r.title), h("div", { class: "sub", text: ago(r.ts) })), h("span"))) : [h("p", { class: "empty", text: "None in the latest batch." })]),
-    h("div", { class: "chips" }, h("button", { class: "chip" + (state.showSells ? " is-on" : ""), onclick: () => { state.showSells = !state.showSells; loadFilings(); } }, "Show insider sales (noisy)")),
+    ...(d.stakes.length ? slice(d.stakes, "stakes").map((r) => h("div", { class: "frow" }, h("span", {}), h("div", {}, h("a", { class: "who", href: r.link }, r.title), h("div", { class: "sub", text: ago(r.ts) })), h("span"))) : [h("p", { class: "empty", text: "None in the latest batch." })]),
+    stakePager,
+    h("div", { class: "chips" }, h("button", { class: "chip" + (state.showSells ? " is-on" : ""), onclick: () => { state.showSells = !state.showSells; renderFilings(); } }, "Show insider sales (noisy)")),
     ...(state.showSells ? sells.map((r) => row(r, false)) : []));
+  renderPager(buyPager, buys.length, "buys", PER.buys, () => { renderFilings(); toTopOf($("#view-filings")); });
+  renderPager(stakePager, d.stakes.length, "stakes", PER.stakes, () => { renderFilings(); toTopOf($("#view-filings")); });
 }
 
 /* ------------------------------------------------------------ reader + Tick */
-const reader = { open: false, marks: [], idx: -1, lockUntil: 0, sleepT: 0, result: null };
+const reader = { open: false, marks: [], idx: -1, lockUntil: 0, sleepT: 0, result: null, page: 0, pageCount: 1 };
+const PAGE_CHARS = 2000;   // about one screen of reading per page
 const scroller = $("#reader-scroll");
 const catEl = $("#cat");
 
@@ -636,25 +763,80 @@ async function render({ title, url, paragraphs, keepErr }, partial = false) {
     res.facts.length > 0 && h("div", { class: "facts" }, res.facts.map((f) => h("span", { class: "fact", title: f.context }, h("b", { text: f.value })))),
     h("p", { class: "fine", text: `Tick reads ${res.sentences} sentences by keywords and numbers. She spots patterns, not truth: verify anything you might act on.${partial ? " (Headline only.)" : ""}` }));
 
-  // article with highlights
+  // article, split into short pages so nobody has to scroll a wall of text
   const seenTerms = new Set();
   const art = $("#article");
-  fill(art, ...res.paras.map((sents) => h("p", {}, sents.map((s, i) => {
-    const sp = i ? " " : "";
-    if (s.hl) {
-      return [sp, h("mark", { class: "hl hl-" + s.cat, "data-n": s.n, tabindex: 0, role: "button",
-        "aria-label": `${CATS[s.cat].label}: ${s.label}. Press Enter for Tick's note.`,
-        onclick: () => focusMark(s.n, false), onkeydown: (e) => { if (e.key === "Enter") focusMark(s.n, false); } }, s.text)];
-    }
-    return [sp, glossSegments(s.text, seenTerms).map((g) => g.def ? h("span", { class: "gl", tabindex: 0, "data-def": g.def, "aria-label": g.t + ": " + g.def }, g.t) : g.t)];
-  }))));
+  const pages = splitPages(res.paras);
+  fill(art, ...pages.map((paras, pi) => h("div", { class: "rpage", "data-page": String(pi), hidden: pi > 0 },
+    paras.map((sents) => h("p", {}, sents.map((s, i) => {
+      const sp = i ? " " : "";
+      if (s.hl) {
+        return [sp, h("mark", { class: "hl hl-" + s.cat, "data-n": s.n, tabindex: 0, role: "button",
+          "aria-label": `${CATS[s.cat].label}: ${s.label}. Press Enter for Tick's note.`,
+          onclick: () => focusMark(s.n, false), onkeydown: (e) => { if (e.key === "Enter") focusMark(s.n, false); } }, s.text)];
+      }
+      return [sp, glossSegments(s.text, seenTerms).map((g) => g.def ? h("span", { class: "gl", tabindex: 0, "data-def": g.def, "aria-label": g.t + ": " + g.def }, g.t) : g.t)];
+    }))))));
   reader.marks = $$("mark.hl", art);
   reader.hls = res.hls;
   reader.idx = -1;
+  reader.pageCount = pages.length;
+  showReaderPage(0);
   scroller.scrollTop = 0;
   catEl.hidden = !$("#cat-on").checked;
   if (reader.marks.length) { focusMark(0, false, true); }
   else { setCatState("sleep"); fill($("#cat-note"), h("div", { text: "Nothing here should change a trade. I checked twice." })); placeCat(null); }
+  wake();
+}
+
+// Group paragraphs into pages of roughly PAGE_CHARS; never leave a tiny last page on its own.
+function splitPages(paras) {
+  const pages = [];
+  let cur = [], n = 0;
+  for (const sents of paras) {
+    cur.push(sents);
+    n += sents.reduce((a, s) => a + s.text.length, 0);
+    if (n >= PAGE_CHARS) { pages.push(cur); cur = []; n = 0; }
+  }
+  if (cur.length) {
+    if (pages.length && n < PAGE_CHARS * 0.35) pages[pages.length - 1].push(...cur); else pages.push(cur);
+  }
+  return pages.length ? pages : [[]];
+}
+
+function renderReaderPager() {
+  const box = $("#rpager"), n = reader.pageCount, cur = reader.page;
+  $("#rpage-tag").textContent = n > 1 ? `Page ${cur + 1} of ${n}` : "";
+  if (n <= 1) { fill(box); box.hidden = true; return; }
+  box.hidden = false;
+  fill(box,
+    h("button", { class: "pg", disabled: cur === 0, onclick: () => goReaderPage(cur - 1) }, "Previous page"),
+    h("span", { class: "pg-of", text: `Page ${cur + 1} of ${n}` }),
+    h("button", { class: "pg", disabled: cur === n - 1, onclick: () => goReaderPage(cur + 1) }, "Next page"));
+}
+
+function showReaderPage(n, { top = true } = {}) {
+  n = Math.min(reader.pageCount - 1, Math.max(0, n));
+  $$(".rpage", $("#article")).forEach((p, i) => { p.hidden = i !== n; });
+  reader.page = n;
+  $("#take").hidden = n > 0;   // the summary belongs to the first page
+  renderReaderPager();
+  if (top) scroller.scrollTo({ top: 0, behavior: "instant" });
+}
+
+function goReaderPage(n) {
+  n = Math.min(reader.pageCount - 1, Math.max(0, n));
+  if (n === reader.page) return;
+  showReaderPage(n);
+  if (!reader.marks.length) return;
+  const i = reader.marks.findIndex((m) => +m.closest(".rpage").dataset.page === n);
+  if (i >= 0) focusMark(i, false, true);
+  else {
+    reader.marks[reader.idx]?.classList.remove("is-focus");
+    reader.idx = -1;
+    fill($("#cat-note"), h("div", { text: "No clues on this page. Turn the page when you are ready." }));
+    setCatState("idle"); placeCat(null);
+  }
   wake();
 }
 
@@ -684,6 +866,8 @@ function focusMark(i, scroll, instant) {
   marks[reader.idx]?.classList.remove("is-focus");
   reader.idx = i;
   const m = marks[i];
+  const pg = +m.closest(".rpage").dataset.page;
+  if (pg !== reader.page) showReaderPage(pg, { top: false });   // the clue lives on another page: turn to it
   m.classList.add("is-focus");
   const hl = reader.hls[i];
   const kind = hl.cat;
@@ -709,7 +893,7 @@ scroller.addEventListener("scroll", () => {
     ticking = false;
     const r = scroller.getBoundingClientRect(), line = r.top + r.height * readLine();
     let best = -1, bd = Infinity;
-    reader.marks.forEach((m, i) => { const b = m.getBoundingClientRect(); const d = Math.abs((b.top + b.bottom) / 2 - line); if (d < bd) { bd = d; best = i; } });
+    reader.marks.forEach((m, i) => { if (m.closest(".rpage").hidden) return; const b = m.getBoundingClientRect(); const d = Math.abs((b.top + b.bottom) / 2 - line); if (d < bd) { bd = d; best = i; } });
     if (best !== reader.idx) focusMark(best, false);
     else placeCat(reader.marks[best]);
     wake();
@@ -722,13 +906,15 @@ document.addEventListener("keydown", (e) => {
   if (/^(INPUT|TEXTAREA)$/.test(e.target.tagName) || e.metaKey || e.ctrlKey) return;
   if (e.key === "n" || e.key === "j") focusMark(reader.idx + 1, true);
   if (e.key === "p" || e.key === "k") focusMark(reader.idx - 1, true);
+  if (e.key === "ArrowRight") goReaderPage(reader.page + 1);
+  if (e.key === "ArrowLeft") goReaderPage(reader.page - 1);
 });
 addEventListener("resize", () => { if (reader.open && reader.marks[reader.idx]) placeCat(reader.marks[reader.idx]); });
 
 /* ------------------------------------------------------------ boot */
 mountTicks();
 syncAlerts();
-loadQuotes(); loadFeed();
+initMarket().then(() => { loadQuotes(); loadFeed(); });
 setInterval(loadFeed, 60000);
 setInterval(loadQuotes, 45000);
 setInterval(() => {

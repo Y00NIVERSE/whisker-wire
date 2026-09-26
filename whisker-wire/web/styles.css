@@ -374,6 +374,64 @@ body.serious .brand { gap: 0; }
   .story .acts .more-btn { padding: 8px 4px; }
 }
 
+/* ---------- markets, first-glance intro and pages ---------- */
+.brand-text { display: flex; flex-direction: column; gap: 3px; }
+.brand-sub { font: 500 11px/1 var(--f-display); letter-spacing: .02em; color: var(--ink-2); }
+.markets-wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px 9px; display: flex; align-items: center; gap: 12px; }
+.mk-label { flex: none; font: 700 10px var(--f-display); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2); }
+.markets { position: relative; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0; }
+.markets::-webkit-scrollbar { display: none; }
+.mkt { flex: none; display: inline-flex; align-items: baseline; gap: 7px; border: 1px solid var(--rule); background: none; border-radius: 999px; padding: 5px 13px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.mkt .mk-short { font: 600 11px var(--f-mono); letter-spacing: .04em; opacity: .75; }
+.mkt:hover { color: var(--ink); border-color: var(--ink-2); }
+.mkt.is-on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.mkt.is-on .mk-short { opacity: 1; }
+
+.hero { max-width: 74ch; margin-bottom: 26px; padding-bottom: 20px; border-bottom: 1px solid var(--rule); }
+.hero-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.hero-head .eyebrow { margin: 0; }
+.hero-toggle { padding: 4px 10px; font-size: 12px; }
+.hero h1 { font: 800 clamp(30px, 4.6vw, 48px)/1.03 var(--f-display); letter-spacing: -.028em; text-wrap: balance; }
+.hero-points { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 20px 0 14px; border-top: 1px solid var(--ink); }
+.hero-points li { padding: 12px 16px 0 0; }
+.hero-points b { display: block; margin-bottom: 3px; font: 800 15px var(--f-display); letter-spacing: -.01em; }
+.hero-points span { font: 400 14.5px/1.4 var(--f-read); color: var(--ink-2); }
+.hero-note { font: 500 12.5px/1.5 var(--f-display); color: var(--ink-2); }
+.section-h { margin: 4px 0 8px; font: 800 22px var(--f-display); letter-spacing: -.02em; scroll-margin-top: 210px; }
+.mkt-note { margin: 0 0 8px; }
+#view-radar, #view-filings { scroll-margin-top: 210px; }
+.col-rail { top: 176px; max-height: calc(100vh - 196px); }
+
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 18px 0 4px; }
+.pager[hidden], .rpager[hidden] { display: none; }
+.pg-range { font: 500 12px var(--f-mono); color: var(--ink-2); }
+.pg-btns { display: flex; flex-wrap: wrap; gap: 4px; }
+.pg { min-width: 40px; height: 40px; padding: 0 13px; border: 1px solid var(--rule); background: none; border-radius: 6px; font: 600 13px var(--f-display); cursor: pointer; }
+.pg:hover:not(:disabled) { border-color: var(--ink); }
+.pg.is-on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.pg:disabled { opacity: .4; cursor: default; }
+.pg-gap { align-self: center; padding: 0 4px; color: var(--ink-2); }
+.pg-tag { margin-right: 12px; font: 600 12px var(--f-mono); color: var(--ink-2); }
+.rpager { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 640px; margin: 10px 0 40px; padding-top: 16px; border-top: 1px solid var(--ink); }
+.pg-of { font: 500 12px var(--f-mono); color: var(--ink-2); }
+
+.portals { max-width: 64ch; }
+.portal-list { display: grid; margin: 14px 0 18px; }
+.portal-list li { display: grid; gap: 2px; padding: 12px 0; border-top: 1px solid var(--rule); }
+.portal-list a { font: 700 16px var(--f-display); }
+.portal-list span { font: 400 15px/1.45 var(--f-read); color: var(--ink-2); }
+
+@media (max-width: 720px) {
+  .top { position: static; }              /* four stacked header rows are too tall to keep pinned on a phone */
+  .brand-sub, .mk-label { display: none; }
+  .markets-wrap { padding: 0 14px 9px; }
+  .hero-points { grid-template-columns: 1fr; }
+  .hero-points li { padding: 10px 0 0; }
+  .col-rail { top: auto; }
+  .section-h, #view-radar, #view-filings { scroll-margin-top: 12px; }
+  .pager { justify-content: center; }
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 1080px) {
   .grid { grid-template-columns: 1fr; gap: 40px; }
