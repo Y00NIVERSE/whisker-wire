@@ -1,6 +1,7 @@
 """Whisker Wire engine: fetch, cluster, score. Standard library only."""
 import concurrent.futures as cf
 import hashlib
+import http.cookiejar
 import html
 import ipaddress
 import json
@@ -19,6 +20,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import track
+from markets import MARKETS, valid_market
 from signals import SIGNALS, MAINSTREAM, TICKER_STOP
 
 ROOT = Path(__file__).parent
@@ -227,7 +229,8 @@ def fetch_source(src):
     t0 = time.time()
     try:
         data, _ = http_get(src["url"])
-        items = parse_feed(data)[:60]
+        # An item with no date cannot be judged fresh, so it is dropped rather than shown as "just now".
+        items = [i for i in parse_feed(data) if i["ts"] is not None][:60]
         for it in items:
             if src.get("gn"):
                 # Google News titles end with " - Publisher"; the description just repeats the title.
@@ -248,7 +251,25 @@ def fetch_source(src):
 
 
 # ---------------------------------------------------------------- tickers and signals
-_T1 = re.compile(r"\((?:(?:NASDAQ|NYSE|NYSE American|NYSEARCA|AMEX|OTC|OTCQB|TSX|LSE)\s*:\s*)?([A-Z]{2,5}(?:\.[A-Z])?)\)")
+_T1 = re.compile(r"\((?:(?:NASDAQ|NYSE|NYSE American|NYSEARCA|AMEX|OTC|OTCQB)\s*:\s*)?([A-Z]{2,5}(?:\.[A-Z])?)\)")
+# Exchange-prefixed tickers ("HKG: 0700", "SGX: D05", "LON: VOD") and Yahoo-style ("0700.HK", "D05.SI").
+_EXCH = {"HKG": ".HK", "HKEX": ".HK", "SEHK": ".HK", "SGX": ".SI", "LON": ".L", "LSE": ".L", "SHA": ".SS", "SSE": ".SS",
+         "SHE": ".SZ", "SZSE": ".SZ", "TYO": ".T", "NSE": ".NS", "BOM": ".BO", "BSE": ".BO", "ASX": ".AX", "TSX": ".TO",
+         "TSXV": ".V", "ETR": ".DE", "FRA": ".F", "EPA": ".PA", "AMS": ".AS", "BIT": ".MI"}
+_T4 = re.compile(r"\b(HKG|HKEX|SEHK|SGX|LON|LSE|SHA|SSE|SHE|SZSE|TYO|NSE|BOM|BSE|ASX|TSXV|TSX|ETR|FRA|EPA|AMS|BIT)\s*:\s*([A-Z0-9]{1,6})\b")
+_T5 = re.compile(r"(?<![A-Za-z0-9.])([A-Z0-9][A-Z0-9&-]{1,11})\.(HK|SI|L|SS|SZ|T|NS|BO|AX|TO|V|DE|F|PA|AS|MI)\b")
+
+
+def yahoo_symbol(exch, code):
+    """Turn an exchange and a local code into the symbol Yahoo uses, or None if it does not fit."""
+    suffix = _EXCH[exch]
+    if suffix == ".HK":
+        if not code.isdigit():
+            return None
+        code = code.lstrip("0").zfill(4)
+    elif suffix in (".SS", ".SZ") and not code.isdigit():
+        return None
+    return code + suffix
 _T2 = re.compile(r"\b(?:NASDAQ|NYSE|AMEX|NYSEARCA|NYSEAMERICAN)\s*:\s*([A-Z]{1,5})\b")
 _T3 = re.compile(r"(?<![A-Za-z0-9])\$([A-Z]{1,5})\b")
 _SIG = [(s, re.compile(s["pattern"], re.I)) for s in SIGNALS]
@@ -256,11 +277,20 @@ _SIG = [(s, re.compile(s["pattern"], re.I)) for s in SIGNALS]
 
 def find_tickers(text):
     seen = []
-    for rx in (_T2, _T3, _T1):
+
+    def add(t):
+        if t and t not in TICKER_STOP and t not in seen:
+            seen.append(t)
+
+    for rx in (_T2, _T3):
         for m in rx.finditer(text):
-            t = m.group(1)
-            if t not in TICKER_STOP and t not in seen:
-                seen.append(t)
+            add(m.group(1))
+    for m in _T4.finditer(text):
+        add(yahoo_symbol(m.group(1), m.group(2)))
+    for m in _T5.finditer(text):
+        add(m.group(1) + "." + m.group(2))
+    for m in _T1.finditer(text):
+        add(m.group(1))
     return seen[:4]
 
 
@@ -356,23 +386,35 @@ def run_parallel(fn, items, deadline=10, workers=32):
     return out
 
 
-def get_feed():
+def sources_for(market):
+    """US sources live in this module; every other market is described in markets.py."""
+    return MARKETS[valid_market(market)]["sources"] or SOURCES
+
+
+def get_feed(market="us"):
+    market = valid_market(market)
+    srcs = sources_for(market)
+    kw = MARKETS[market].get("kw")
+
     def run():
         now = time.time()
         raw, health = [], []
-        for src, res in zip(SOURCES, run_parallel(fetch_source, SOURCES)):
+        for src, res in zip(srcs, run_parallel(fetch_source, srcs)):
             if res is None:
                 health.append({"id": src["id"], "name": src["name"], "kind": src["kind"], "ok": False,
                                "count": 0, "ms": 10000, "error": "Timeout"})
                 continue
             _src, items, h = res
+            if src.get("gn") and kw:
+                items = [i for i in items if kw.search(i["title"])]   # searches are loose; keep only what is local
             raw += [i for i in items if now - i["ts"] < MAX_AGE_H * 3600 and i["ts"] < now + 600]
             health.append(h)
         stories = [build_story(g, now) for g in cluster(raw)]
         stories.sort(key=lambda s: (LEVEL_RANK[s["level"]], -s["score"], -s["ts"]))
-        threading.Thread(target=_track_cycle, args=(stories, now), daemon=True).start()
-        return {"generated": int(now), "stories": stories[:160], "health": health, "raw_items": len(raw)}
-    return cached("feed", 90, run)
+        if market == "us":  # the track record benchmarks against the S&P 500, so it only makes sense for US stories
+            threading.Thread(target=_track_cycle, args=(stories, now), daemon=True).start()
+        return {"market": market, "generated": int(now), "stories": stories[:160], "health": health, "raw_items": len(raw)}
+    return cached("feed:" + market, 90, run)
 
 
 # ---------------------------------------------------------------- markets
@@ -398,12 +440,15 @@ def _quote_row(pair):
         return {"symbol": sym, "label": label, "price": None, "chg": None}
 
 
-def get_quotes():
+def get_quotes(market="us"):
+    market = valid_market(market)
+    strip = MARKETS[market]["strip"] or STRIP
+
     def run():
-        rows = run_parallel(_quote_row, STRIP, deadline=12, workers=9)
-        return {"quotes": [r or {"symbol": s, "label": l, "price": None, "chg": None}
-                           for r, (s, l) in zip(rows, STRIP)], "generated": int(time.time())}
-    return cached("quotes", 45, run)
+        rows = run_parallel(_quote_row, strip, deadline=12, workers=9)
+        return {"market": market, "quotes": [r or {"symbol": s, "label": l, "price": None, "chg": None}
+                                            for r, (s, l) in zip(rows, strip)], "generated": int(time.time())}
+    return cached("quotes:" + market, 45, run)
 
 
 def get_spark(sym):
@@ -469,7 +514,7 @@ def analyze_quote(q, list_id):
     if fpe and fpe > 0:
         if fpe < 12:
             score += 20
-            good.append(f"Forward P/E of {fpe:.1f} means you pay about ${fpe:.0f} for each $1 of next year's expected profit. That is low.")
+            good.append(f"Forward P/E of {fpe:.1f} means you pay about {fpe:.0f} times next year's expected profit per share. That is low.")
         elif fpe < 18:
             score += 10
             good.append(f"Forward P/E of {fpe:.1f} is reasonable next to the long-run market average near 16 to 20.")
@@ -498,7 +543,7 @@ def analyze_quote(q, list_id):
         score -= 6
     if above_low < 12:
         warn.append("Within 12% of its 52-week low. Wait for the price to stop falling before calling it a bottom.")
-    if mcap and mcap < 300_000_000:
+    if mcap and mcap < 300_000_000 and (q.get("currency") or "USD") == "USD":  # size limits are in dollars
         warn.append("Micro-cap: thin trading, wide spreads, easy to get stuck in.")
         score -= 6
     if list_id == "most_shorted_stocks":
@@ -509,7 +554,8 @@ def analyze_quote(q, list_id):
 
     return {
         "symbol": q.get("symbol"), "name": q.get("longName") or q.get("shortName") or q.get("symbol"),
-        "list": list_id, "price": price, "chg": (price / prev - 1) * 100 if prev else None,
+        "list": list_id, "currency": q.get("currency") or "USD", "price": price,
+        "chg": (price / prev - 1) * 100 if prev else None,
         "pe": pe, "fpe": fpe, "pb": pb, "mcap": mcap, "hi": hi, "lo": lo,
         "off_high": off_high, "vs200": vs200, "vol_ratio": vol_ratio, "rating": rating,
         "score": int(max(0, min(100, round(score)))), "good": good[:4], "warn": warn[:3],
@@ -521,8 +567,76 @@ def _screener(sid):
     return json.loads(data)["finance"]["result"][0].get("quotes", [])
 
 
-def get_undervalued():
+UA_CHROME = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+             "Chrome/124.0 Safari/537.36")
+_yh_lock = threading.Lock()
+_yh = {"opener": None, "crumb": None, "ts": 0.0}
+
+
+def _yahoo_session(force=False):
+    """Yahoo's custom screener wants a cookie and a matching crumb. Both are fetched from fixed Yahoo hosts."""
+    with _yh_lock:
+        if force or not _yh["crumb"] or time.time() - _yh["ts"] > 3000:
+            op = urllib.request.build_opener(_Redirect, urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            op.addheaders = [("User-Agent", UA_CHROME)]
+            try:
+                op.open("https://fc.yahoo.com", timeout=10)  # answers 404 but sets the cookie
+            except Exception:
+                pass
+            crumb = op.open(f"{YF}/v1/test/getcrumb", timeout=10).read().decode().strip()
+            if not crumb or "<" in crumb:
+                raise ValueError("Yahoo did not issue a session")
+            _yh.update(opener=op, crumb=crumb, ts=time.time())
+        return _yh["opener"], _yh["crumb"]
+
+
+def _screen_market(spec, size=250):
+    """Largest listed companies on the given exchanges, most valuable first."""
+    body = {"size": size, "offset": 0, "sortField": "intradaymarketcap", "sortType": "DESC", "quoteType": "EQUITY",
+            "topOperator": "AND", "userId": "", "userIdType": "guid",
+            "query": {"operator": "AND", "operands": [
+                {"operator": "OR", "operands": [{"operator": "EQ", "operands": ["exchange", x]} for x in spec["exchanges"]]},
+                {"operator": "GT", "operands": ["intradaymarketcap", 1_000_000_000]}]}}
+    for attempt in (0, 1):
+        op, crumb = _yahoo_session(force=bool(attempt))
+        url = (f"{YF}/v1/finance/screener?crumb={urllib.parse.quote(crumb)}&lang=en-US&region=US"
+               "&formatted=false&corsDomain=finance.yahoo.com")
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "User-Agent": UA_CHROME})
+        try:
+            quotes = json.loads(op.open(req, timeout=20).read())["finance"]["result"][0].get("quotes", [])
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and attempt == 0:
+                continue  # crumb expired: get a fresh session and try once more
+            raise
+    # Cross-listings in other currencies (a Japanese stock on the London exchange, say) are not local companies.
+    return [q for q in quotes if q.get("currency") in spec["currencies"]]
+
+
+LARGE_CAP_COUNT = 80  # first N by size are "large caps"; the rest of the screen is "mid and small caps"
+
+
+def rank_market_screen(quotes):
+    """Score each company and return the best value candidates from the large and the mid/small groups."""
+    out = []
+    for group, label, chunk in (("large", "Large caps", quotes[:LARGE_CAP_COUNT]),
+                                ("mid", "Mid and small caps", quotes[LARGE_CAP_COUNT:])):
+        rows = sorted((r for r in (analyze_quote(q, group) for q in chunk) if r), key=lambda r: -r["score"])[:14]
+        for r in rows:
+            r["list_label"] = label
+        out += rows
+    out.sort(key=lambda r: -r["score"])
+    return out
+
+
+def get_undervalued(market="us"):
+    market = valid_market(market)
+
     def run():
+        if market != "us":
+            spec = MARKETS[market]["screen"]
+            return {"market": market, "generated": int(time.time()), "picks": rank_market_screen(_screen_market(spec))}
         out, seen = [], set()
         for sid, label in SCREENERS:
             try:
@@ -536,8 +650,8 @@ def get_undervalued():
                     r["list_label"] = label
                     out.append(r)
         out.sort(key=lambda r: -r["score"])
-        return {"generated": int(time.time()), "picks": out}
-    return cached("under", 300, run)
+        return {"market": "us", "generated": int(time.time()), "picks": out}
+    return cached("under:" + market, 600 if market != "us" else 300, run)
 
 
 # ---------------------------------------------------------------- SEC EDGAR (needs your contact)
@@ -762,7 +876,8 @@ def _daily_series(sym):
 
 def _track_cycle(stories, now):
     try:
-        track.observe(stories, now, _last_price, _daily_series)
+        us_only = [s for s in stories if s["tickers"] and "." not in s["tickers"][0]]
+        track.observe(us_only, now, _last_price, _daily_series)
     except Exception:
         pass  # logging must never affect the feed
 

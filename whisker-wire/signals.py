@@ -94,6 +94,13 @@ MAINSTREAM = {
     "cnbc", "marketwatch", "yahoofinance", "yahoo", "nasdaq", "reuters", "bloomberg", "wsj",
     "thewallstreetjournal", "financialtimes", "ft", "apnews", "associatedpress", "cnn",
     "cnnbusiness", "forbes", "barrons", "investorsbusinessdaily", "foxbusiness", "businessinsider",
+    # regional majors: an item only they carry is still "in the big headlines"
+    "southchinamorningpost", "scmp", "thestraitstimes", "thebusinesstimes", "channelnewsasia", "cna", "bbcnews",
+    "bbc", "theguardian", "guardian", "skynews", "thetimes", "thetelegraph", "nikkeiasia", "nikkei",
+    "thejapantimes", "theeconomictimes", "economictimes", "mint", "livemint", "businessstandard",
+    "thehindubusinessline", "thehindu", "thesydneymorningherald", "abcnews", "theaustralianfinancialreview",
+    "financialpost", "theglobeandmail", "cbc", "cbcnews", "euronews", "france24", "dw", "chinadaily", "xinhua",
+    "thestandard", "thewallstreetjournal", "bloombergnews",
 }
 
 # Words that look like tickers in parentheses but are not.
@@ -102,4 +109,13 @@ TICKER_STOP = {
     "US", "UK", "EU", "ESG", "LLC", "INC", "LTD", "PE", "PPI", "PCE", "OPEC", "NYSE", "DOJ", "FTC",
     "IMF", "ECB", "BOE", "BOJ", "FOMC", "AP", "UPDATE", "VIDEO", "WATCH", "LIVE", "NEW", "TOP",
     "BEST", "USD", "EUR", "GBP", "YTD", "QOQ", "YOY", "ETFS", "IRS", "NFL", "NBA", "TV", "IT", "ALL",
+    # regulators, exchanges and central banks that appear in brackets in non-US headlines
+    "BBC", "FTSE", "HKEX", "SGX", "ASX", "TSX", "NSE", "BSE", "SEBI", "PBOC", "CSRC", "RBI", "BOJ", "BOE", "MAS",
+    "HKMA", "SFC", "FCA", "PRA", "CMA", "ASIC", "APRA", "RBA", "JPX", "REIT", "REITS", "SME", "OECD", "UAE",
+    "NATO", "ISA", "RNS", "AGM", "EGM", "ADR", "PMI", "FX", "DAX", "CAC", "STI", "ECB", "OTC",
+    # company and agency short names commonly written in brackets, not tickers
+    "DBS", "OCBC", "UOB", "SIA", "CPF", "HDB", "MRT", "LTA", "LSEG", "AIA", "HKT", "MTR",
+    # filing and market jargon that shows up in brackets (mostly Indian and UK business press)
+    "DRHP", "OFS", "EPC", "NCLT", "GST", "FPI", "FII", "DII", "NBFC", "PSU", "PSB", "MSME", "QIP", "GDR", "RHP",
+    "EBITDA", "PAT", "CAGR", "AUM", "NAV", "SIP", "ULIP", "ESOP", "SPV", "JV", "MOU", "MOA",
 }

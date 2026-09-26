@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import engine
+from markets import market_list, valid_market
 from signals import SIGNALS
 
 WEB = (Path(__file__).parent / "web").resolve()
@@ -25,19 +26,25 @@ def _signals():
     return {"signals": [{k: s[k] for k in ("id", "label", "dir", "cat", "weight", "pattern", "note")} for s in SIGNALS]}
 
 
-def _health():
-    f = engine.get_feed()
+def _mk(q):
+    """The market the browser asked for; anything unknown quietly becomes the default."""
+    return valid_market((q.get("market") or [""])[0])
+
+
+def _health(market="us"):
+    f = engine.get_feed(market)
     return {"sources": f["health"], "sec_configured": bool(engine.sec_agent())}
 
 
 ROUTES = {
-    "/api/feed": lambda q: engine.get_feed(),
-    "/api/quotes": lambda q: engine.get_quotes(),
-    "/api/undervalued": lambda q: engine.get_undervalued(),
+    "/api/feed": lambda q: engine.get_feed(_mk(q)),
+    "/api/quotes": lambda q: engine.get_quotes(_mk(q)),
+    "/api/undervalued": lambda q: engine.get_undervalued(_mk(q)),
+    "/api/markets": lambda q: {"markets": market_list()},
     "/api/filings": lambda q: engine.get_filings(),
     "/api/signals": lambda q: _signals(),
     "/api/track": lambda q: engine.get_track(),
-    "/api/health": lambda q: _health(),
+    "/api/health": lambda q: _health(_mk(q)),
     "/api/ticker": lambda q: engine.get_ticker(q.get("symbol", [""])[0]),
     "/api/article": lambda q: engine.get_article(q.get("url", [""])[0]),
 }
