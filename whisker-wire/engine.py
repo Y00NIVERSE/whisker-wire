@@ -18,12 +18,14 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 
+import track
 from signals import SIGNALS, MAINSTREAM, TICKER_STOP
 
 ROOT = Path(__file__).parent
 UA_BROWSER = "Mozilla/5.0 (compatible; WhiskerWire/0.1; personal research tool)"
 MAX_AGE_H = 36
 
+LEVEL_RANK = {"urgent": 0, "watch": 1, "normal": 2}
 GN = "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q="
 
 # tier "main" = the feeds that make up top headlines; "niche" = everything else.
@@ -104,6 +106,14 @@ _OPENER = urllib.request.build_opener(_Redirect)
 def http_get(url, headers=None, timeout=8, max_bytes=3_000_000):
     assert_public(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA_BROWSER, "Accept": "*/*", **(headers or {})})
+    with _OPENER.open(req, timeout=timeout) as r:
+        return r.read(max_bytes), r.headers.get_content_charset() or "utf-8"
+
+
+def http_post(url, body, headers=None, timeout=10, max_bytes=1_000_000):
+    assert_public(url)
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"User-Agent": UA_BROWSER, **(headers or {})})
     with _OPENER.open(req, timeout=timeout) as r:
         return r.read(max_bytes), r.headers.get_content_charset() or "utf-8"
 
@@ -303,11 +313,19 @@ def build_story(g, now):
     sig_score = sum(s["weight"] for s in top)
     recency = 3 if age_h < 1 else 2 if age_h < 3 else 1 if age_h < 8 else 0
     corro = min(len(pubs) - 1, 3)
-    score = sig_score + recency + corro + (1 if tickers else 0)
-    if not sigs:
-        score = min(score, 3)
-    elif lead["title"].rstrip().endswith("?"):
-        score -= 2  # question headlines ("Undervalued?") are usually engagement bait, not news
+    has_ticker = 1 if tickers else 0
+    question = bool(sigs) and lead["title"].rstrip().endswith("?")  # "Undervalued?" headlines are engagement bait
+    raw = sig_score + recency + corro + has_ticker - (2 if question else 0)
+    no_signal_cap = not sigs and raw > 3
+    score = 3 if no_signal_cap else raw
+
+    official = any(i["kind"] == "Government" for i in items)
+    # Urgent has to be trustworthy as well as strong: one lesser-known outlet alone stays at Watch.
+    unconfirmed = len(pubs) == 1 and n_main == 0 and not official
+    level = "urgent" if score >= 8 and not unconfirmed else "watch" if score >= 5 else "normal"
+    parts = {"signals": [{"label": s["label"], "pts": s["weight"]} for s in top], "fresh": recency, "outlets": corro,
+             "ticker": has_ticker, "question": -2 if question else 0, "no_signal_cap": no_signal_cap,
+             "capped": score >= 8 and unconfirmed}
 
     dirs = {s["dir"] for s in top}
     direction = ("mixed" if {"bull", "bear"} <= dirs else "bull" if "bull" in dirs
@@ -319,8 +337,7 @@ def build_story(g, now):
         "ts": int(first_ts), "tickers": tickers,
         "signals": [{"id": s["id"], "label": s["label"], "dir": s["dir"]} for s in top],
         "why": top[0]["note"] if top else "",
-        "dir": direction, "score": score,
-        "level": "urgent" if score >= 8 else "watch" if score >= 5 else "normal",
+        "dir": direction, "score": score, "parts": parts, "level": level,
         "publishers": sorted(pubs.values()), "n_pub": len(pubs), "n_main": n_main,
         "kinds": sorted({i["kind"] for i in items}),
         "corroborated": len(pubs) >= 2, "overlooked": overlooked,
@@ -352,7 +369,8 @@ def get_feed():
             raw += [i for i in items if now - i["ts"] < MAX_AGE_H * 3600 and i["ts"] < now + 600]
             health.append(h)
         stories = [build_story(g, now) for g in cluster(raw)]
-        stories.sort(key=lambda s: (-s["score"], -s["ts"]))
+        stories.sort(key=lambda s: (LEVEL_RANK[s["level"]], -s["score"], -s["ts"]))
+        threading.Thread(target=_track_cycle, args=(stories, now), daemon=True).start()
         return {"generated": int(now), "stories": stories[:160], "health": health, "raw_items": len(raw)}
     return cached("feed", 90, run)
 
@@ -523,12 +541,25 @@ def get_undervalued():
 
 
 # ---------------------------------------------------------------- SEC EDGAR (needs your contact)
+CONTACT_FILE = ROOT / "sec_contact.txt"
+_CONTACT_RX = re.compile(r"^[^\r\n<>@]{2,80}\s+[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$")
+
+
 def sec_agent():
     ua = os.environ.get("SEC_USER_AGENT", "").strip()
-    f = ROOT / "sec_contact.txt"
-    if not ua and f.exists():
-        ua = f.read_text(encoding="utf-8").strip()
+    if not ua and CONTACT_FILE.exists():
+        ua = CONTACT_FILE.read_text(encoding="utf-8").strip()
     return ua if ua and "@" in ua else ""
+
+
+def save_sec_contact(text, path=None):
+    """Validate and store the identity the SEC asks automated clients to send. Stays on this machine."""
+    text = " ".join((text or "").split())
+    if len(text) > 140 or not _CONTACT_RX.match(text):
+        raise ValueError("Enter your name and a real email address, for example: Jane Doe jane@example.com")
+    (path or CONTACT_FILE).write_text(text + "\n", encoding="utf-8")
+    _cache.pop("filings", None)
+    return text
 
 
 def _sec_get(url):
@@ -669,7 +700,41 @@ class _Extract(HTMLParser):
             self.cur.append(data)
 
 
+_GN_ID = re.compile(r"^/(?:rss/)?articles/([A-Za-z0-9_-]+)")
+
+
+def resolve_google_news(url):
+    """Google News RSS links are redirect stubs. Ask Google the same question its own page asks, so the
+    reader can open the publisher's page. Returns the original URL unchanged if it is not a stub."""
+    u = urllib.parse.urlparse(url)
+    m = _GN_ID.match(u.path) if u.hostname == "news.google.com" else None
+    if not m:
+        return url
+    gid = m.group(1)
+
+    def run():
+        page, cs = http_get(f"https://news.google.com/rss/articles/{gid}", timeout=10)
+        html_ = page.decode(cs, "replace")
+        sig = re.search(r'data-n-a-sg="([^"]+)"', html_)
+        ts = re.search(r'data-n-a-ts="([^"]+)"', html_)
+        if not sig or not ts:
+            raise ValueError("Google News did not reveal the original page.")
+        inner = json.dumps(["garturlreq", [["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1, None, None, None,
+                                            None, None, 0, 1], "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0],
+                            gid, int(ts.group(1)), sig.group(1)])
+        req = json.dumps([[["Fbv4je", inner, None, "generic"]]])
+        body = ("f.req=" + urllib.parse.quote(req)).encode()
+        raw, cs2 = http_post("https://news.google.com/_/DotsSplashUi/data/batchexecute", body,
+                             {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"})
+        out = re.search(r'garturlres\\?",\\?"(https?://[^"\\]+)', raw.decode(cs2, "replace"))
+        if not out:
+            raise ValueError("Google News did not reveal the original page.")
+        return out.group(1)
+    return cached("gn:" + gid, 3600, run)
+
+
 def get_article(url):
+    url = resolve_google_news(url)
     data, cs = http_get(url, max_bytes=2_500_000, timeout=15)
     p = _Extract()
     p.feed(data.decode(cs, "replace"))
@@ -677,3 +742,30 @@ def get_article(url):
     if len(paras) < 2:
         raise ValueError("Could not extract readable text (paywall or script-rendered page). Paste the text instead.")
     return {"url": url, "title": clean_text(p.og or p.title)[:200], "paragraphs": paras}
+
+
+# ---------------------------------------------------------------- track record
+def _last_price(sym):
+    if not SYM_RE.match(sym):
+        return None
+    try:
+        return _chart(sym, "5d")["meta"].get("regularMarketPrice")
+    except Exception:
+        return None
+
+
+def _daily_series(sym):
+    r = _chart(sym, "1mo")
+    return [(t, c) for t, c in zip(r.get("timestamp") or [], r["indicators"]["quote"][0].get("close") or [])
+            if c is not None]
+
+
+def _track_cycle(stories, now):
+    try:
+        track.observe(stories, now, _last_price, _daily_series)
+    except Exception:
+        pass  # logging must never affect the feed
+
+
+def get_track():
+    return track.report()

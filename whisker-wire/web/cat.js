@@ -44,6 +44,21 @@ const GLOSSARY = {
   "tailwinds": "Conditions that help the business.",
   "consensus": "The average of what analysts expect. Beating consensus is what moves the price.",
   "activist investor": "A shareholder who buys a big stake to push the company to change.",
+  "Fwd P/E": "Forward P/E: price divided by next year's expected profit per share. Lower can mean cheaper.",
+  "P/B": "Price divided by book value (what the company owns minus what it owes). Under about 1.5 can mean a bargain or a problem.",
+  "Mkt cap": "Market cap: share price times number of shares, the stock market's price tag for the whole company.",
+  "trailing P/E": "P/E using the last 12 months of actual profit.",
+  "52-week high": "The highest price in the past year. Being far below it means the stock has fallen a lot.",
+  "200-day average": "The average price over about 10 months. A stock far below it is in a downtrend.",
+  "Schedule 13D": "A filing when someone crosses 5% ownership and may want to influence the company.",
+  "short seller": "Someone who bets the price will fall by selling borrowed shares and buying them back cheaper.",
+  "premarket": "Trading before the regular 9:30am Eastern open. Thin, so prices jump around.",
+  "restatement": "A company correcting its past financial results. A serious red flag about the numbers.",
+  "share repurchase": "The company buying its own shares (a buyback), so each remaining share owns more.",
+  "upgrade": "An analyst raising their rating on a stock.",
+  "downgrade": "An analyst lowering their rating on a stock.",
+  "open-market": "Bought or sold on the regular exchange at the going price, not through a company grant.",
+  "analysts": "Professionals at banks and research firms who rate stocks. Ratings run from 1 (strong buy) to 5 (sell).",
 };
 export const GLOSSARY_TERMS = Object.keys(GLOSSARY).sort((a, b) => b.length - a.length);
 export const glossaryDef = (t) => GLOSSARY[Object.keys(GLOSSARY).find((k) => k.toLowerCase() === t.toLowerCase())] || "";
