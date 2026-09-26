@@ -8,6 +8,7 @@ import json
 import mimetypes
 import re
 import sys
+import urllib.error
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,6 +36,7 @@ ROUTES = {
     "/api/undervalued": lambda q: engine.get_undervalued(),
     "/api/filings": lambda q: engine.get_filings(),
     "/api/signals": lambda q: _signals(),
+    "/api/track": lambda q: engine.get_track(),
     "/api/health": lambda q: _health(),
     "/api/ticker": lambda q: engine.get_ticker(q.get("symbol", [""])[0]),
     "/api/article": lambda q: engine.get_article(q.get("url", [""])[0]),
@@ -58,10 +60,35 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code, obj):
         self._send(code, json.dumps(obj).encode(), "application/json; charset=utf-8")
 
-    def do_GET(self):
+    def _host_ok(self):
         # DNS-rebinding guard: only answer requests addressed to this machine by name or loopback IP.
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
-        if host not in ("127.0.0.1", "localhost", "::1"):
+        return host in ("127.0.0.1", "localhost", "::1")
+
+    def do_POST(self):
+        # The only write: saving the contact the SEC requires. Guarded against cross-site requests:
+        # same-origin only, JSON only (a cross-origin page cannot send that without a preflight we never grant).
+        if not self._host_ok():
+            return self._json(403, {"error": "forbidden host"})
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
+            return self._json(403, {"error": "cross-site request refused"})
+        if urllib.parse.urlparse(self.path).path != "/api/sec-contact":
+            return self._json(404, {"error": "unknown endpoint"})
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
+            return self._json(415, {"error": "send JSON"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if not 0 < n <= 2048:
+                raise ValueError("bad size")
+            body = json.loads(self.rfile.read(n))
+            contact = engine.save_sec_contact(f"{body.get('name', '')} {body.get('email', '')}")
+        except (ValueError, TypeError, AttributeError) as e:
+            return self._json(400, {"error": str(e) if isinstance(e, ValueError) and "email" in str(e) else "Enter your name and a real email address."})
+        return self._json(200, {"ok": True, "configured": True, "contact": contact})
+
+    def do_GET(self):
+        if not self._host_ok():
             return self._json(403, {"error": "forbidden host"})
         u = urllib.parse.urlparse(self.path)
         if u.path.startswith("/api/"):
@@ -72,6 +99,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, fn(urllib.parse.parse_qs(u.query)))
             except ValueError as e:
                 return self._json(400, {"error": str(e)})
+            except urllib.error.HTTPError as e:
+                return self._json(502, {"error": f"The publisher refused automated access (HTTP {e.code}). Paste the text instead."})
             except Exception as e:
                 return self._json(502, {"error": f"upstream failed: {type(e).__name__}"})
         rel = "index.html" if u.path in ("", "/") else urllib.parse.unquote(u.path).lstrip("/")

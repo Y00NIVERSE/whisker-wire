@@ -56,6 +56,7 @@
       <button class="tab is-on" data-view="wire" aria-pressed="true">Wire</button>
       <button class="tab" data-view="radar" aria-pressed="false">Value Radar</button>
       <button class="tab" data-view="filings" aria-pressed="false">Filings</button>
+      <button class="tab" id="tab-how" aria-pressed="false">Sources &amp; scoring</button>
       <button class="tab tab-read" id="open-reader" aria-pressed="false">Read with Tick</button>
     </nav>
     <div class="status">
@@ -73,16 +74,51 @@
       <div class="intro">
         <p class="eyebrow">The wire</p>
         <h1>What moved in the last hours, ranked by how much it should matter.</h1>
-        <p class="lede">Twenty-plus independent sources, duplicates merged, nothing hidden. Every score shows its working, and every story shows who else is (or is not) covering it.</p>
+        <p class="lede">Twenty-plus independent sources, duplicates merged, nothing hidden. Click any score to see how it was built, and every story shows who else is (or is not) covering it.</p>
       </div>
+      <section class="start" id="start" aria-label="Start here">
+        <p class="eyebrow">Start here: the top three, in plain English</p>
+        <ol class="start-list" id="start-list"></ol>
+      </section>
       <div class="toolbar">
         <div class="chips" id="filters" role="group" aria-label="Filter stories"></div>
-        <form class="watch" id="watch-form" autocomplete="off">
-          <label for="watch-in" class="sr">Add a ticker to your watchlist</label>
-          <input id="watch-in" placeholder="Add ticker, e.g. NVDA" maxlength="6" spellcheck="false">
-          <button class="ghost" type="submit">Watch</button>
-        </form>
+        <div class="tools">
+          <button class="ghost" id="btn-sources" aria-expanded="false" aria-controls="panel">Sources <span class="n" id="src-count"></span></button>
+          <button class="ghost" id="btn-how" aria-expanded="false" aria-controls="panel">How scoring works</button>
+          <form class="watch" id="watch-form" autocomplete="off">
+            <label for="watch-in" class="sr">Add a ticker to your watchlist</label>
+            <input id="watch-in" placeholder="Add ticker, e.g. NVDA" maxlength="6" spellcheck="false">
+            <button class="ghost" type="submit">Watch</button>
+          </form>
+        </div>
       </div>
+      <section class="panel" id="panel" hidden aria-label="Sources and scoring">
+        <div class="panel-col" id="sec-sources">
+          <p class="eyebrow">Your mix, your call</p>
+          <p class="small">Turn source types on or off. Nothing is ranked down for its politics, only for its evidence.</p>
+          <div class="chips kinds" id="kinds" role="group" aria-label="Source types"></div>
+          <p class="eyebrow gap">Source health</p>
+          <ul class="health" id="health"></ul>
+        </div>
+        <div class="panel-col" id="sec-how">
+          <p class="eyebrow">How a story is scored</p>
+          <p class="small mono">points = top 3 signal weights<br>+ fresh (0 to 3)<br>+ other outlets (0 to 3)<br>+ ticker found (1)<br>&minus; 2 if the headline is a question</p>
+          <ul class="defs">
+            <li><b>Urgent</b> 8 or more points, and confirmed: two or more outlets, or one major or official source.</li>
+            <li><b>Watch</b> 5 to 7 points, or 8 or more with only one lesser-known outlet so far.</li>
+            <li><b>Single source</b> Only one outlet reported it. Wait for a second, or the filing itself.</li>
+            <li><b>Corroborated</b> Two or more different outlets reported the same story.</li>
+            <li><b>Not in big headlines</b> A strong signal that CNBC, MarketWatch, Yahoo Finance and Nasdaq are not carrying yet. Early, but unconfirmed.</li>
+          </ul>
+          <p class="small">Click any story's score to see exactly how it was built.</p>
+        </div>
+        <div class="panel-col" id="sec-track">
+          <p class="eyebrow">Track record (measured on this computer)</p>
+          <div id="track-body"></div>
+          <p class="eyebrow gap">Preferences</p>
+          <label class="switch"><input type="checkbox" id="serious"><span>Serious mode: hide the cat mascot</span></label>
+        </div>
+      </section>
       <div class="chips watching" id="watching" aria-label="Your watchlist"></div>
       <ol class="wire" id="wire-list"></ol>
       <p class="empty" id="wire-empty" hidden>Nothing matches those filters right now. Tick is napping.</p>
@@ -109,19 +145,9 @@
   </section>
 
   <aside class="col-rail" aria-label="Side rail">
-    <section class="rail-sec">
+    <section class="rail-sec rail-top3">
       <p class="eyebrow">Tick's top three right now</p>
       <ol class="top3" id="top3"></ol>
-    </section>
-    <section class="rail-sec">
-      <p class="eyebrow">Your mix, your call</p>
-      <p class="small">Turn source types on or off. Nothing is ranked down for its politics, only for its evidence.</p>
-      <div class="chips kinds" id="kinds" role="group" aria-label="Source types"></div>
-      <details class="how">
-        <summary>How is a story scored?</summary>
-        <p class="small mono">score = top 3 signal weights<br>+ recency (0 to 3)<br>+ other publishers (0 to 3)<br>+ ticker found (1)<br>&minus; 2 if the headline is a question</p>
-        <p class="small">Urgent is 8 or more, Watch is 5 to 7. Under the radar means a strong signal that none of the big headline sites carry yet.</p>
-      </details>
     </section>
     <section class="rail-sec">
       <p class="eyebrow">Read this before you trade</p>
@@ -130,10 +156,6 @@
         <li><b>Public news is priced in fast.</b> Being early is a bonus, not a promise. Size small.</li>
         <li><b>Never trade on non-public information.</b> That is illegal insider trading.</li>
       </ul>
-    </section>
-    <section class="rail-sec">
-      <p class="eyebrow">Source health</p>
-      <ul class="health" id="health"></ul>
     </section>
     <p class="fine">Education, not advice. Data comes from public feeds and can be delayed or wrong. Runs on your machine, no account, no tracking.</p>
   </aside>

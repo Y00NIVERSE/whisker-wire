@@ -46,6 +46,33 @@ const ago = (ts) => {
   return m < 1 ? "just now" : m < 60 ? m + "m ago" : m < 1440 ? Math.round(m / 60) + "h ago" : Math.round(m / 1440) + "d ago";
 };
 const dirClass = (n, invert) => (n == null || Math.abs(n) < 0.005 ? "flat" : (n > 0) !== !!invert ? "up" : "down");
+async function postJson(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Request failed");
+  return j;
+}
+
+// Jargon gets a dotted underline and a plain-English tooltip everywhere, not only in the reader.
+function glossNodes(text, seen = new Set()) {
+  return glossSegments(text, seen).map((g) => (g.def
+    ? h("span", { class: "gl", tabindex: 0, "data-def": g.def, "aria-label": g.t + ": " + g.def }, g.t) : g.t));
+}
+const tip = (cls, text, def) => h("span", { class: "tagx tip " + cls, tabindex: 0, "data-def": def, "aria-label": text + ": " + def }, text);
+
+// Send people to the primary source: the company's own filings on SEC.gov.
+const SEC_FORM = { "insider-buy": ["4", "Form 4 insider trades"], "insider-sell": ["4", "Form 4 insider trades"], activist: ["SCHEDULE 13D", "13D stake filings"] };
+const SEC_8K = new Set(["guidance-up", "guidance-down", "beat", "miss", "distress", "exec-exit", "probe", "takeover", "buyback", "fda", "contract", "dividend", "dilution", "layoffs", "recall", "halt"]);
+function secLink(s) {
+  const tk = s.tickers[0];
+  if (!tk || !/^[A-Z.]{1,6}$/.test(tk)) return null;
+  const ids = s.signals.map((g) => g.id);
+  const hit = ids.find((i) => SEC_FORM[i]);
+  const [form, label] = hit ? SEC_FORM[hit] : ids.some((i) => SEC_8K.has(i)) ? ["8-K", "8-K company announcements"] : [null];
+  if (!form) return null;
+  return { label: "SEC.gov: " + label, url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(tk)}&type=${encodeURIComponent(form)}&dateb=&owner=include&count=20` };
+}
+
 const isGoogle = (u) => { try { return new URL(u).hostname === "news.google.com"; } catch { return false; } };
 
 /* ------------------------------------------------------------ state */
@@ -54,7 +81,7 @@ const state = {
   watch: new Set(store.get("watch", [])),
   kinds: new Set(store.get("kinds", [])), allKinds: new Set(),
   feed: null, picks: null, radarList: "all", seen: null, openSrcs: new Set(),
-  signals: null, showSells: false,
+  signals: null, showSells: false, openCalc: new Set(),
 };
 
 /* ------------------------------------------------------------ Tick drawings */
@@ -102,7 +129,7 @@ async function loadQuotes() {
 const FILTERS = [
   ["all", "All", () => true],
   ["urgent", "Urgent", (s) => s.level === "urgent"],
-  ["ovr", "Under the radar", (s) => s.overlooked],
+  ["ovr", "Not in big headlines", (s) => s.overlooked],
   ["bull", "Bullish", (s) => s.dir === "bull" || s.dir === "mixed"],
   ["bear", "Bearish", (s) => s.dir === "bear" || s.dir === "mixed"],
   ["corro", "Corroborated", (s) => s.corroborated],
@@ -127,34 +154,73 @@ function renderFilters() {
 function renderWatching() {
   const tags = [...state.watch].map((t) => h("button", { class: "wtag", title: "Remove " + t, onclick: () => { state.watch.delete(t); store.set("watch", [...state.watch]); renderWire(); } }, t));
   if (state.ticker) tags.unshift(h("button", { class: "wtag", title: "Clear ticker filter", onclick: () => { state.ticker = null; renderWire(); } }, "Showing " + state.ticker));
+  if (state.watch.size) tags.unshift(h("span", { class: "wlabel", text: "Watching" }));
   fill($("#watching"), ...tags);
+}
+
+const LEVEL_NOTE = {
+  urgent: "Urgent: 8 or more points and confirmed by two or more outlets, or by a major or official source.",
+  watch: "Watch: 5 to 7 points.",
+  normal: "Under 5 points, so it stays in the background.",
+};
+
+function calcEl(s, open) {
+  const p = s.parts;
+  const row = (label, pts) => h("li", {}, h("span", { text: label }), h("b", { class: "cn", text: (pts > 0 ? "+" : "") + pts }));
+  return h("div", { class: "calc" + (open ? " is-on" : "") },
+    h("p", { class: "calc-h", text: `How ${s.score} points were built` }),
+    h("ul", {},
+      p.signals.map((g) => row(g.label, g.pts)),
+      !p.signals.length && row("No trading signal found", 0),
+      row("Fresh news (under 1 hour is 3, under 3 hours is 2, under 8 hours is 1)", p.fresh),
+      row("Other outlets reporting it", p.outlets),
+      row("A stock ticker is named", p.ticker),
+      p.question !== 0 && row("Question headline (often clickbait)", p.question)),
+    h("p", { class: "calc-sum" }, `Total: ${s.score} points`),
+    p.no_signal_cap && h("p", { class: "calc-n", text: "Stories with no trading signal are held at 3 points." }),
+    p.capped
+      ? h("p", { class: "calc-n warn", text: "Held at Watch: only one lesser-known outlet reports this so far. It becomes Urgent once a second outlet, or a major or official source, confirms it." })
+      : h("p", { class: "calc-n", text: LEVEL_NOTE[s.level] }));
 }
 
 function storyEl(s, isNew) {
   const mine = s.tickers.some((t) => state.watch.has(t));
   const open = state.openSrcs.has(s.id);
+  const calcOpen = state.openCalc.has(s.id);
+  const seen = new Set();
+  const calc = calcEl(s, calcOpen);
+  const scoreBtn = h("button", { class: "scorebtn", "aria-expanded": String(calcOpen), title: "Click to see how this score was built",
+    "aria-label": `${s.score} points. Show how it was built.`,
+    onclick: () => { const on = calc.classList.toggle("is-on"); on ? state.openCalc.add(s.id) : state.openCalc.delete(s.id); scoreBtn.setAttribute("aria-expanded", String(on)); } },
+  h("span", { class: "n", text: s.score }), h("span", { class: "pts", text: "pts" }));
   const srcList = h("ul", { class: "srcs" + (open ? " is-on" : "") },
-    s.links.map((l) => h("li", {}, h("a", { href: l.url }, l.publisher), " · " + l.title)));
+    s.links.map((l) => h("li", {}, h("a", { href: l.url }, l.publisher), isGoogle(l.url) ? " (via Google News)" : "", " · " + l.title)));
+  const sec = secLink(s);
   return h("li", { class: `story lvl-${s.level}` + (isNew ? " is-new" : ""), "data-id": s.id },
-    h("div", { class: "score" }, h("span", { class: "n", text: s.score }), h("span", { class: "lbl", text: s.level })),
+    h("div", { class: "score" }, scoreBtn, h("span", { class: "lbl", text: s.level })),
     h("div", { class: "body" },
       h("div", { class: "meta" },
         h("span", { "data-ts": s.ts, text: ago(s.ts) }),
         h("span", { text: s.n_pub + (s.n_pub === 1 ? " source" : " sources") }),
-        s.corroborated ? h("span", { class: "tagx tag-corr", text: "Corroborated" }) : h("span", { class: "tagx tag-single", text: "Single source" }),
-        s.overlooked && h("span", { class: "tagx tag-ovr", text: "Under the radar" }),
+        s.corroborated
+          ? tip("tag-corr", "Corroborated", "Two or more different outlets reported this.")
+          : tip("tag-single", "Single source", "Only one outlet reported this so far. Unconfirmed: wait for a second outlet or the filing."),
+        s.overlooked && tip("tag-ovr", "Not in big headlines", "A strong signal that CNBC, MarketWatch, Yahoo Finance and Nasdaq are not carrying yet. Early, but unconfirmed: check before acting."),
         mine && h("span", { class: "tagx tag-mine", text: "Your ticker" })),
       h("h3", {}, h("a", { href: s.link }, s.title)),
-      s.summary && h("p", { class: "sum", text: s.summary.length > 260 ? s.summary.slice(0, 257) + "…" : s.summary }),
-      s.why && h("p", { class: "why" }, h("b", { text: "Why it matters" }), s.why),
+      calc,
+      s.summary && h("p", { class: "sum" }, glossNodes(s.summary.length > 260 ? s.summary.slice(0, 257) + "…" : s.summary, seen)),
+      s.why && h("p", { class: "why" }, h("b", { text: "Why it matters" }), glossNodes(s.why, seen)),
       h("div", { class: "tags" },
         s.tickers.map((t) => h("button", { class: "tk", title: "Show only " + t, onclick: () => { state.ticker = t; state.shown = 40; setView("wire"); renderWire(); } }, t)),
         s.signals.map((g) => h("span", { class: "sg sg-" + g.dir, text: g.label }))),
       h("div", { class: "acts" },
         h("button", { class: "read", onclick: () => openReader({ story: s }) }, "Read with Tick"),
-        h("a", { href: s.link }, "Original"),
+        h("button", { class: "more-btn", "aria-label": "Show more about this story", onclick: (e) => { const on = e.target.closest(".story").classList.toggle("is-open"); e.target.textContent = on ? "Less" : "More"; } }, "More"),
+        sec && h("a", { href: sec.url, title: "The company's own filings, straight from the SEC" }, sec.label),
+        h("a", { href: s.link, title: isGoogle(s.link) ? "Opens through Google News, which then forwards you to the publisher" : "" }, isGoogle(s.link) ? "Original (via Google News)" : "Original"),
         h("a", { href: "https://web.archive.org/web/2/" + s.link }, "Archive copy"),
-        h("button", { onclick: (e) => { const on = srcList.classList.toggle("is-on"); on ? state.openSrcs.add(s.id) : state.openSrcs.delete(s.id); e.target.setAttribute("aria-expanded", on); }, "aria-expanded": open },
+        h("button", { onclick: (e) => { const on = srcList.classList.toggle("is-on"); on ? state.openSrcs.add(s.id) : state.openSrcs.delete(s.id); e.target.setAttribute("aria-expanded", String(on)); }, "aria-expanded": String(open) },
           "Who reported it (" + s.n_pub + ")")),
       srcList));
 }
@@ -171,19 +237,39 @@ function renderWire() {
   }
   fill(box, ...nodes);
   $("#wire-empty").hidden = list.length > 0;
+  $("#wire-empty").textContent = emptyText();
   renderTop3();
 }
 
+function emptyText() {
+  if (state.filter === "mine") {
+    const n = state.watch.size;
+    return n
+      ? `None of your watched ${n === 1 ? "ticker is" : "tickers are"} in the news right now (${[...state.watch].join(", ")}). New mentions will appear here.`
+      : "Add a ticker above (like NVDA) and any story that mentions it will show up here.";
+  }
+  if (state.ticker) return `No stories mention ${state.ticker} right now.`;
+  return "Nothing matches those filters right now. Tick is napping.";
+}
+
+const topStories = () => state.feed.stories.filter((s) => s.kinds.some((k) => state.kinds.has(k))).slice(0, 3);
+
 function renderTop3() {
   if (!state.feed) return;
-  const top = state.feed.stories.filter((s) => s.kinds.some((k) => state.kinds.has(k))).slice(0, 3);
-  fill($("#top3"), ...top.map((s) => h("li", {},
+  fill($("#top3"), ...topStories().map((s) => h("li", {},
     h("div", {}, h("button", { onclick: () => openReader({ story: s }), text: s.title }),
-      h("span", { class: "m", text: `score ${s.score} · ${s.n_pub} ${s.n_pub === 1 ? "source" : "sources"} · ${ago(s.ts)}` })))));
+      h("span", { class: "m", text: `${s.score} pts · ${s.n_pub} ${s.n_pub === 1 ? "source" : "sources"} · ${ago(s.ts)}` })))));
+  const PLAIN = { bull: ["Good news", "sg-bull"], bear: ["Bad news", "sg-bear"], mixed: ["Mixed news", "sg-flag"], flag: ["Worth a look", "sg-flag"], none: ["Background", "sg-flag"] };
+  fill($("#start-list"), ...topStories().map((s) => h("li", {},
+    h("div", { class: "st-head" }, h("span", { class: "sg " + PLAIN[s.dir][1], text: PLAIN[s.dir][0] }),
+      h("span", { class: "st-meta", text: `${s.n_pub} ${s.n_pub === 1 ? "source" : "sources"} · ${ago(s.ts)}` })),
+    h("button", { class: "st-title", onclick: () => openReader({ story: s }), text: s.title }),
+    s.why && h("p", { class: "st-why" }, glossNodes(s.why)))));
 }
 
 function renderKinds() {
   const kinds = [...state.allKinds].sort();
+  $("#src-count").textContent = `${state.kinds.size}/${state.allKinds.size}`;
   fill($("#kinds"), ...kinds.map((k) => h("button", {
     class: "chip" + (state.kinds.has(k) ? " is-on" : ""), "aria-pressed": state.kinds.has(k),
     onclick: () => { state.kinds.has(k) ? state.kinds.delete(k) : state.kinds.add(k); store.set("kinds", [...state.kinds]); renderKinds(); renderWire(); },
@@ -241,7 +327,14 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) { do
 $("#watch-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const v = $("#watch-in").value.trim().toUpperCase().replace(/[^A-Z.]/g, "");
-  if (v) { state.watch.add(v); store.set("watch", [...state.watch]); $("#watch-in").value = ""; renderWire(); }
+  if (!v) return flash("Type a ticker symbol first, like NVDA.");
+  $("#watch-in").value = "";
+  if (state.watch.has(v)) return flash(`${v} is already on your watchlist.`);
+  state.watch.add(v); store.set("watch", [...state.watch]);
+  const n = state.feed ? state.feed.stories.filter((s) => s.tickers.includes(v)).length : 0;
+  renderWire();
+  flash(n ? `${v} added. ${n} ${n === 1 ? "story mentions" : "stories mention"} it right now: see "My tickers".`
+    : `${v} added. No stories mention it right now; new mentions will show up under "My tickers".`);
 });
 
 $("#alerts").addEventListener("click", async () => {
@@ -259,6 +352,54 @@ function syncAlerts() { $("#alerts").textContent = store.get("alerts", false) ? 
 function flash(msg) {
   const t = $("#toast"); t.textContent = msg; t.hidden = false; t.onclick = () => { t.hidden = true; };
   clearTimeout(announce.t); announce.t = setTimeout(() => { t.hidden = true; }, 4000);
+}
+
+/* ------------------------------------------------------------ sources, scoring, track record */
+const panel = $("#panel");
+function openPanel(which) {
+  const same = !panel.hidden && panel.dataset.focus === which;
+  panel.hidden = same;
+  panel.dataset.focus = same ? "" : which;
+  $("#btn-sources").setAttribute("aria-expanded", String(!panel.hidden && which === "sources"));
+  $("#btn-how").setAttribute("aria-expanded", String(!panel.hidden && which === "how"));
+  if (same) return;
+  loadTrack();
+  const sec = $("#sec-" + which);
+  sec.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  $$(".panel-col", panel).forEach((c) => c.classList.toggle("hot", c === sec));
+}
+// One tap from any tab: go to the wire and open the panel.
+$("#tab-how").addEventListener("click", () => {
+  setView("wire");
+  if (panel.hidden) openPanel("how");
+  requestAnimationFrame(() => $(".toolbar").scrollIntoView({ behavior: "smooth", block: "start" }));
+});
+$("#btn-sources").addEventListener("click", () => openPanel("sources"));
+$("#btn-how").addEventListener("click", () => openPanel("how"));
+
+const serious = $("#serious");
+serious.checked = store.get("serious", false);
+document.body.classList.toggle("serious", serious.checked);
+serious.addEventListener("change", () => { document.body.classList.toggle("serious", serious.checked); store.set("serious", serious.checked); });
+
+async function loadTrack() {
+  const box = $("#track-body");
+  try { renderTrack(box, await api("/api/track")); }
+  catch { fill(box, h("p", { class: "small", text: "Track record is unavailable right now." })); }
+}
+
+function renderTrack(box, t) {
+  const intro = h("p", { class: "small", text: "Each Urgent or Watch story that names a stock is logged with its price and the S&P 500's at that moment, then checked 1 and 5 trading days later. Results only show once there are enough to mean something." });
+  if (!t.logged) return fill(box, intro, h("p", { class: "small strong", text: "Collecting: nothing measured yet. Leave the app running and check back in a week." }));
+  const prog = h("p", { class: "small strong", text: `${t.logged} logged over ${t.days_running} days. ${t.measured_5d} of the ${t.min_sample} needed have a 5-day result.` });
+  if (!t.enough) return fill(box, intro, prog);
+  const label = (g) => `${g.level === "urgent" ? "Urgent" : "Watch"} · ${g.dir === "bull" ? "bullish" : "bearish"}`;
+  const rows = t.groups.filter((g) => g.n5 > 0).map((g) => h("li", {},
+    h("span", { text: label(g) }),
+    h("span", { class: "mono", text: `${Math.round(g.hit5 * 100)}% right after 5 days` }),
+    h("span", { class: "mono " + (g.avg5 >= 0 ? "up" : "down"), text: `${fmt.pct(g.avg5 * 100)} vs S&P 500` }),
+    h("span", { class: "mono small", text: `n=${g.n5}${g.n5 < 10 ? " (small)" : ""}` })));
+  fill(box, prog, h("ul", { class: "trk" }, rows), h("p", { class: "small", text: "Right means a bullish story's stock beat the S&P 500 (or a bearish one's lagged it). Small samples swing wildly." }));
 }
 
 /* ------------------------------------------------------------ value radar */
@@ -290,7 +431,9 @@ function pickEl(p) {
   const pos = Math.min(100, Math.max(0, ((p.price - p.lo) / (p.hi - p.lo)) * 100));
   const tier = p.score >= 70 ? "hi" : p.score >= 50 ? "mid" : "lo";
   const detail = h("div", { class: "detail" });
-  const metric = (label, val) => h("span", {}, h("b", { text: label }), val);
+  const metric = (label, val) => h("span", {}, h("b", {}, glossNodes(label)), val);
+  const seen = new Set();
+  const bullet = (t) => h("li", {}, glossNodes(t, seen));
   return h("article", { class: "pick" },
     h("div", { class: "pk-head" },
       h("span", { class: "pk-sym", text: p.symbol }), h("span", { class: "pk-name", text: p.name }),
@@ -301,15 +444,15 @@ function pickEl(p) {
       h("div", { class: "meter", role: "img", "aria-label": "Value score " + p.score + " out of 100" }, h("i", { style: { transform: `scaleX(${p.score / 100})`, background: tier === "hi" ? "var(--bull)" : tier === "mid" ? "var(--alert)" : "var(--ink-2)" } })),
       h("div", { class: "cap", text: tier === "hi" ? "Strong value case" : tier === "mid" ? "Worth a look" : "Weak case" })),
     h("div", {}, h("div", { class: "metrics" },
-      metric("Fwd P/E", fmt.x(p.fpe)), metric("P/B", p.pb != null && p.pb < 0 ? "negative" : fmt.x(p.pb)), metric("Off 52w high", fmt.pct(p.off_high, 0)),
+      metric("Fwd P/E", fmt.x(p.fpe)), metric("P/B", p.pb != null && p.pb < 0 ? "negative" : fmt.x(p.pb)), metric("Off 52-week high", fmt.pct(p.off_high, 0)),
       metric("Mkt cap", p.mcap ? fmt.usd(p.mcap) : "n/a"), metric("Analysts", p.rating ? p.rating.split(" - ")[1] || p.rating : "n/a")),
     h("div", { class: "range", role: "img", "aria-label": `Price sits ${pos.toFixed(0)} percent of the way up its 52 week range` },
       h("i", { style: { left: pos + "%" } }),
       h("span", { style: { left: "0" }, text: "$" + fmt.price(p.lo) }),
       h("span", { style: { right: "0" }, text: "$" + fmt.price(p.hi) }))),
     h("div", { class: "two" },
-      h("div", { class: "g" }, h("h4", { text: "Why it looks cheap" }), h("ul", {}, p.good.length ? p.good.map((t) => h("li", { text: t })) : h("li", { text: "Few classic value signals. Its score comes from small pieces." }))),
-      h("div", { class: "w" }, h("h4", { text: "How it could be a trap" }), h("ul", {}, p.warn.map((t) => h("li", { text: t }))))),
+      h("div", { class: "g" }, h("h4", { text: "Why it looks cheap" }), h("ul", {}, p.good.length ? p.good.map(bullet) : h("li", { text: "Few classic value signals. Its score comes from small pieces." }))),
+      h("div", { class: "w" }, h("h4", { text: "How it could be a trap" }), h("ul", {}, p.warn.map(bullet)))),
     h("div", { class: "pk-acts" },
       h("button", { onclick: async (e) => {
         const on = detail.classList.toggle("is-on"); e.target.textContent = on ? "Hide chart and news" : "Chart and news";
@@ -337,21 +480,28 @@ function renderRadar() {
 }
 
 /* ------------------------------------------------------------ filings */
+function secSetup() {
+  const name = h("input", { type: "text", placeholder: "Your name", autocomplete: "name", maxlength: "60", required: true, "aria-label": "Your name" });
+  const email = h("input", { type: "email", placeholder: "you@example.com", autocomplete: "email", required: true, "aria-label": "Your email" });
+  const msg = h("p", { class: "small", role: "status" });
+  const form = h("form", { class: "sec-form", onsubmit: async (e) => {
+    e.preventDefault(); msg.textContent = "Saving…";
+    try { await postJson("/api/sec-contact", { name: name.value, email: email.value }); loadFilings(); }
+    catch (err) { msg.textContent = err.message; }
+  } }, name, email, h("button", { class: "primary", type: "submit" }, "Turn on filings"));
+  return h("div", { class: "setup" },
+    h("h3", { text: "Turn on insider trades in one step" }),
+    h("p", { class: "small", text: "The SEC asks anyone who fetches filings automatically to say who they are. This is saved only on this computer, in a file called sec_contact.txt, and sent only to sec.gov with each request. Never anywhere else." }),
+    form, msg,
+    h("p", { class: "small", text: "Prefer to do it by hand? Create whisker-wire/sec_contact.txt containing one line: Your Name you@example.com" }));
+}
+
 async function loadFilings() {
   const box = $("#filings-body");
   fill(box, h("p", { class: "empty", text: "Asking the SEC…" }));
   let d;
   try { d = await api("/api/filings"); } catch (e) { return fill(box, h("p", { class: "empty", text: "Could not load filings: " + e.message })); }
-  if (!d.configured) {
-    return fill(box, h("div", { class: "setup" },
-      h("h3", { text: "One step to unlock insider trades" }),
-      h("p", { class: "small", text: "The SEC requires anyone fetching filings automatically to identify themselves. Your details stay on this computer and go only to sec.gov." }),
-      h("ol", {},
-        h("li", {}, "Create a file called ", h("code", { text: "sec_contact.txt" }), " inside the whisker-wire folder."),
-        h("li", {}, "Put one line in it: ", h("code", { text: "Your Name your.email@example.com" })),
-        h("li", { text: "Restart the server, then reopen this tab." })),
-      h("p", { class: "small", text: "Until then the wire and the value radar work as normal." })));
-  }
+  if (!d.configured) return fill(box, secSetup());
   const buys = d.insider.filter((r) => r.buy_usd > 0);
   const sells = d.insider.filter((r) => r.sell_usd > 0 && !r.buy_usd);
   const cluster = {};
@@ -364,7 +514,7 @@ async function loadFilings() {
     h("div", { class: "amt " + (buy ? "buy" : "sell"), text: fmt.usd(buy ? r.buy_usd : r.sell_usd) }));
   fill(box, 
     h("h2", { class: "subhead", text: "Insiders buying with their own cash" }),
-    h("p", { class: "small", text: "Open-market purchases (code P) from the latest Form 4 filings. Several insiders at one company is the strongest version." }),
+    h("p", { class: "small" }, glossNodes("Open-market purchases (code P) from the latest Form 4 filings. Several insiders at one company is the strongest version.")),
     ...(buys.length ? buys.map((r) => row(r, true)) : [h("p", { class: "empty", text: d.insider_error ? "The SEC did not answer (" + d.insider_error + "). Try again shortly." : "No open-market insider buys in the latest batch." })]),
     h("h2", { class: "subhead", text: "Big holders and activists (Schedule 13D)" }),
     ...(d.stakes.length ? d.stakes.map((r) => h("div", { class: "frow" }, h("span", {}), h("div", {}, h("a", { class: "who", href: r.link }, r.title), h("div", { class: "sub", text: ago(r.ts) })), h("span"))) : [h("p", { class: "empty", text: "None in the latest batch." })]),
@@ -442,12 +592,6 @@ async function ensureSignals() {
 
 async function loadStory(s) {
   showPaste(false);
-  head({ title: s.title, url: s.link });
-  if (isGoogle(s.link)) {
-    // Google News hides the publisher URL behind a script redirect, so we cannot fetch it server-side.
-    head({ title: s.title, url: s.link, err: "Google News hides the original page behind a redirect, so Tick cannot fetch it. Open the original, copy the text, and paste it here. Meanwhile, here is what Tick can read from the headline." });
-    return render({ title: s.title, url: s.link, paragraphs: [s.title + (/[.!?]$/.test(s.title) ? "" : ".")], keepErr: true }, true);
-  }
   await loadUrl(s.link, s.title, s.summary);
 }
 
@@ -460,10 +604,12 @@ async function loadUrl(url, fallbackTitle, summary = "") {
     const a = await api("/api/article?url=" + encodeURIComponent(url));
     await render({ title: a.title || fallbackTitle || url, url, paragraphs: a.paragraphs });
   } catch (e) {
-    head({ title: fallbackTitle || url, url, err: e.message + " Paste the article text below and Tick will read that instead." });
+    head({ title: fallbackTitle || url, url, err: e.message + (/paste/i.test(e.message) ? "" : " Paste the article text below and Tick will read that instead.") });
     showPaste(true);
-    if (summary) await render({ title: fallbackTitle, url, paragraphs: [summary], keepErr: true }, true);
-    else { fill($("#article"), ); catEl.hidden = true; }
+    // Never leave a dead end: read what we do have (summary or headline) so Tick still has something to say.
+    const basic = summary || (fallbackTitle ? fallbackTitle + (/[.!?]$/.test(fallbackTitle) ? "" : ".") : "");
+    if (basic) await render({ title: fallbackTitle, url, paragraphs: [basic], keepErr: true }, true);
+    else { fill($("#article")); catEl.hidden = true; }
   }
 }
 

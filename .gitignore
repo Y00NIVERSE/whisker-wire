@@ -5,3 +5,4 @@ Thumbs.db
 # Whisker Wire local config
 whisker-wire/sec_contact.txt
 __pycache__/
+whisker-wire/data/
