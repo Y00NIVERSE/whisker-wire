@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whisker Wire</title>
+<meta name="description" content="Fast, unfiltered market information for newer traders, with Tick the cat annotating what matters.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..500&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314221C'/%3E%3Cpath d='M6 24V9l6 5h8l6-5v15z' fill='%23E39B0B'/%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the wire</a>
+
+<!-- Tick, drawn once and cloned by JS so the brand mark and the reader cat share one drawing. -->
+<template id="tick-tpl">
+  <svg class="tick-svg" viewBox="0 0 150 140" role="img" aria-label="Tick, a tabby cat wearing round glasses">
+    <g class="tick-tail">
+      <path d="M108 112 C140 108 146 70 124 62" fill="none" stroke="var(--cat)" stroke-width="11" stroke-linecap="round"/>
+      <path d="M133 98 l7 -4 M137 84 l8 -2 M130 70 l6 -6" stroke="var(--cat-dark)" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <ellipse cx="76" cy="108" rx="36" ry="27" fill="var(--cat)"/>
+    <path d="M52 96 q6 8 0 16 M100 96 q-6 8 0 16" stroke="var(--cat-dark)" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <ellipse cx="61" cy="130" rx="10" ry="6.5" fill="var(--cat-light)"/>
+    <ellipse cx="91" cy="130" rx="10" ry="6.5" fill="var(--cat-light)"/>
+    <g class="tick-head">
+      <g class="tick-ears">
+        <path d="M42 50 L45 15 L67 35 Z" fill="var(--cat)"/><path d="M48 41 L49 25 L60 35 Z" fill="var(--cat-ear)"/>
+        <path d="M110 50 L107 15 L85 35 Z" fill="var(--cat)"/><path d="M104 41 L103 25 L92 35 Z" fill="var(--cat-ear)"/>
+      </g>
+      <ellipse cx="76" cy="60" rx="35" ry="30" fill="var(--cat)"/>
+      <path d="M76 31 v11 M67 33 l2.5 9 M85 33 l-2.5 9" stroke="var(--cat-dark)" stroke-width="3.2" stroke-linecap="round"/>
+      <path d="M43 58 h8 M44 66 l7 -2 M109 58 h-8 M108 66 l-7 -2" stroke="var(--cat-dark)" stroke-width="2.6" stroke-linecap="round"/>
+      <ellipse cx="76" cy="72" rx="14" ry="10" fill="var(--cat-light)"/>
+      <g class="tick-eyes">
+        <g class="tick-eye"><ellipse cx="62" cy="58" rx="6" ry="7" fill="#fff"/><ellipse class="tick-pupil" cx="62" cy="58" rx="2.4" ry="5.2" fill="#14221C"/></g>
+        <g class="tick-eye"><ellipse cx="90" cy="58" rx="6" ry="7" fill="#fff"/><ellipse class="tick-pupil" cx="90" cy="58" rx="2.4" ry="5.2" fill="#14221C"/></g>
+        <g class="tick-lids"><path d="M55 58 q7 5 14 0" fill="none" stroke="#14221C" stroke-width="2.4" stroke-linecap="round"/><path d="M83 58 q7 5 14 0" fill="none" stroke="#14221C" stroke-width="2.4" stroke-linecap="round"/></g>
+      </g>
+      <g fill="none" stroke="var(--glass)" stroke-width="2.4"><circle cx="62" cy="58" r="10.5"/><circle cx="90" cy="58" r="10.5"/><path d="M72.5 57 q3.5 -3 7 0"/><path d="M51.5 56 L44 52 M100.5 56 L108 52"/></g>
+      <path d="M72 70 h8 l-4 4.5 Z" fill="#D9647E"/>
+      <path d="M76 74.5 v3 M76 77.5 q-4 4 -8 1 M76 77.5 q4 4 8 1" fill="none" stroke="#14221C" stroke-width="1.9" stroke-linecap="round"/>
+    </g>
+  </svg>
+</template>
+
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="/" aria-label="Whisker Wire home">
+      <span class="brand-cat" data-tick="mini"></span>
+      <span class="brand-name">Whisker Wire</span>
+    </a>
+    <nav class="tabs" aria-label="Sections" id="tabs">
+      <button class="tab is-on" data-view="wire" aria-pressed="true">Wire</button>
+      <button class="tab" data-view="radar" aria-pressed="false">Value Radar</button>
+      <button class="tab" data-view="filings" aria-pressed="false">Filings</button>
+      <button class="tab tab-read" id="open-reader" aria-pressed="false">Read with Tick</button>
+    </nav>
+    <div class="status">
+      <span class="live" id="live" role="status" aria-live="polite"><i class="dot"></i><span id="updated">Connecting</span></span>
+      <button class="ghost" id="alerts" title="Get a desktop alert when something urgent lands">Alerts</button>
+      <button class="ghost" id="theme" aria-label="Switch color theme">Theme</button>
+    </div>
+  </div>
+  <div class="strip" id="strip" aria-label="Market snapshot"></div>
+</header>
+
+<main id="main" class="grid">
+  <section class="col-main" aria-live="polite">
+    <div class="view is-on" id="view-wire">
+      <div class="intro">
+        <p class="eyebrow">The wire</p>
+        <h1>What moved in the last hours, ranked by how much it should matter.</h1>
+        <p class="lede">Twenty-plus independent sources, duplicates merged, nothing hidden. Every score shows its working, and every story shows who else is (or is not) covering it.</p>
+      </div>
+      <div class="toolbar">
+        <div class="chips" id="filters" role="group" aria-label="Filter stories"></div>
+        <form class="watch" id="watch-form" autocomplete="off">
+          <label for="watch-in" class="sr">Add a ticker to your watchlist</label>
+          <input id="watch-in" placeholder="Add ticker, e.g. NVDA" maxlength="6" spellcheck="false">
+          <button class="ghost" type="submit">Watch</button>
+        </form>
+      </div>
+      <div class="chips watching" id="watching" aria-label="Your watchlist"></div>
+      <ol class="wire" id="wire-list"></ol>
+      <p class="empty" id="wire-empty" hidden>Nothing matches those filters right now. Tick is napping.</p>
+    </div>
+
+    <div class="view" id="view-radar">
+      <div class="intro">
+        <p class="eyebrow">Value radar</p>
+        <h1>Stocks the market has marked down, with the reasons to buy and the ways it goes wrong.</h1>
+        <p class="lede">Ranked by a transparent 0 to 100 score built from discount to the 52-week high, forward earnings, book value, analyst view and unusual volume. Cheap is a question, not an answer.</p>
+      </div>
+      <div class="chips" id="radar-filters" role="group" aria-label="Filter radar"></div>
+      <div class="radar" id="radar-list"></div>
+    </div>
+
+    <div class="view" id="view-filings">
+      <div class="intro">
+        <p class="eyebrow">Official filings</p>
+        <h1>What insiders and big holders just told the SEC.</h1>
+        <p class="lede">Executives and 10% owners must report trades within two business days. Buying with their own money is the signal worth reading; selling is noisy.</p>
+      </div>
+      <div id="filings-body"></div>
+    </div>
+  </section>
+
+  <aside class="col-rail" aria-label="Side rail">
+    <section class="rail-sec">
+      <p class="eyebrow">Tick's top three right now</p>
+      <ol class="top3" id="top3"></ol>
+    </section>
+    <section class="rail-sec">
+      <p class="eyebrow">Your mix, your call</p>
+      <p class="small">Turn source types on or off. Nothing is ranked down for its politics, only for its evidence.</p>
+      <div class="chips kinds" id="kinds" role="group" aria-label="Source types"></div>
+      <details class="how">
+        <summary>How is a story scored?</summary>
+        <p class="small mono">score = top 3 signal weights<br>+ recency (0 to 3)<br>+ other publishers (0 to 3)<br>+ ticker found (1)<br>&minus; 2 if the headline is a question</p>
+        <p class="small">Urgent is 8 or more, Watch is 5 to 7. Under the radar means a strong signal that none of the big headline sites carry yet.</p>
+      </details>
+    </section>
+    <section class="rail-sec">
+      <p class="eyebrow">Read this before you trade</p>
+      <ul class="rules">
+        <li><b>Single source</b> means unconfirmed. Wait for a second outlet or the filing itself.</li>
+        <li><b>Public news is priced in fast.</b> Being early is a bonus, not a promise. Size small.</li>
+        <li><b>Never trade on non-public information.</b> That is illegal insider trading.</li>
+      </ul>
+    </section>
+    <section class="rail-sec">
+      <p class="eyebrow">Source health</p>
+      <ul class="health" id="health"></ul>
+    </section>
+    <p class="fine">Education, not advice. Data comes from public feeds and can be delayed or wrong. Runs on your machine, no account, no tracking.</p>
+  </aside>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<aside class="drawer" id="reader" aria-hidden="true" aria-label="Reader with Tick">
+  <div class="drawer-bar">
+    <button class="ghost" id="reader-close" aria-label="Close reader">Close</button>
+    <div class="seg" role="group" aria-label="Reader input">
+      <button id="mode-article" class="is-on">Article</button>
+      <button id="mode-paste">Paste text or link</button>
+    </div>
+    <div class="bar-right">
+      <label class="switch"><input type="checkbox" id="cat-on" checked><span>Tick on</span></label>
+    </div>
+  </div>
+  <div class="drawer-scroll" id="reader-scroll">
+    <div class="paste" id="paste" hidden>
+      <label for="paste-in">Paste an article, a filing excerpt, or a link. Paywalled? Paste the text.</label>
+      <textarea id="paste-in" rows="8" placeholder="https://... or the article text"></textarea>
+      <button class="primary" id="paste-go">Let Tick read it</button>
+    </div>
+    <div class="reader-head" id="reader-head"></div>
+    <section class="take" id="take" hidden></section>
+    <div class="reader-body" id="reader-body">
+      <article class="article" id="article" tabindex="-1"></article>
+    </div>
+  </div>
+  <div class="cat" id="cat" data-state="idle" aria-live="polite" hidden>
+    <div class="cat-note" id="cat-note"></div>
+    <div class="cat-fig" id="cat-fig" data-tick="full"></div>
+  </div>
+</aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
