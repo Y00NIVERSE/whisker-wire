@@ -125,11 +125,19 @@ button, input, textarea { font: inherit; color: inherit; }
 .tk:hover { background: var(--ink); color: var(--paper); }
 .sg { font: 600 11px var(--f-display); border-radius: 999px; padding: 3px 9px; border: 1px solid; background: color-mix(in srgb, currentColor 9%, transparent); }
 .sg-bull { color: var(--bull); } .sg-bear { color: var(--bear); } .sg-flag { color: var(--fine); }
-.acts { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 13px; font-weight: 600; }
+.acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 14px; font-size: 13px; font-weight: 600; }
 .acts button, .acts a { background: none; border: 0; padding: 0; cursor: pointer; color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 4px; }
-.acts .read { color: var(--ink); background: var(--ink); color: var(--paper); padding: 6px 12px; border-radius: 6px; text-decoration: none; }
-.acts .read:hover { filter: brightness(1.2); }
-.acts button:hover, .acts a:hover { color: var(--ink); text-decoration-color: currentColor; }
+/* Read here is the one action that keeps you on Whisker Wire, so it gets the primary treatment; everything
+   that leaves the app (.ext) stays deliberately quieter and is marked with an outbound arrow. */
+.acts .read { display: inline-flex; align-items: center; gap: 7px; background: var(--ink); color: var(--paper); font: 800 14.5px var(--f-display); letter-spacing: -.005em; padding: 9px 16px; border-radius: 7px; text-decoration: none; box-shadow: 3px 3px 0 color-mix(in srgb, var(--ink) 55%, transparent); transition: transform .14s ease, box-shadow .14s ease; }
+.acts .read-ic { transition: transform .16s ease; }
+.acts .read:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 color-mix(in srgb, var(--ink) 55%, transparent); }
+.acts .read:hover .read-ic { transform: translateX(3px); }
+.acts .read:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 color-mix(in srgb, var(--ink) 55%, transparent); }
+.acts .ext { font-size: 12.5px; color: color-mix(in srgb, var(--ink-2) 88%, transparent); }
+.ext-ic { font-size: 10px; margin-left: 1px; opacity: .7; }
+.acts button:not(.read):hover, .acts a:hover { color: var(--ink); text-decoration-color: currentColor; }
+.acts a:hover .ext-ic { opacity: 1; }
 .srcs { margin-top: 8px; font-size: 13px; color: var(--ink-2); display: none; }
 .srcs.is-on { display: block; }
 .srcs li { padding: 2px 0; }
@@ -420,6 +428,7 @@ body::after {
   .tape-mask { overflow-x: auto; }
   .story.reveal, .pick.reveal { opacity: 1; transform: none; }
   .chip:hover, .tk:hover, .mkt:hover, .pg:hover, .ghost:hover, .primary:hover, .ghost:active, .primary:active { transform: none; box-shadow: none; }
+  .acts .read:hover, .acts .read:active, .acts .read:hover .read-ic { transform: none; box-shadow: 3px 3px 0 color-mix(in srgb, var(--ink) 55%, transparent); }
 }
 @media (max-width: 720px) {
   .tape-t { max-width: 26ch; }
