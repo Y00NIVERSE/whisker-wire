@@ -59,6 +59,7 @@
       <button class="tab is-on" data-view="wire" aria-pressed="true">Wire</button>
       <button class="tab" data-view="radar" aria-pressed="false">Value Radar</button>
       <button class="tab" data-view="filings" aria-pressed="false">Filings</button>
+      <button class="tab" data-view="memory" aria-pressed="false">Tick remembers</button>
       <button class="tab" id="tab-how" aria-pressed="false">Sources &amp; scoring</button>
       <button class="tab tab-read" id="open-reader" aria-pressed="false">Read with Tick</button>
     </nav>
@@ -73,6 +74,11 @@
     <div class="markets" id="markets" role="group" aria-labelledby="mk-label"></div>
   </div>
   <div class="strip" id="strip" aria-label="Market snapshot"></div>
+  <div class="tape" id="tape" aria-hidden="true">
+    <div class="tape-mask">
+      <div class="tape-track" id="tape-track"></div>
+    </div>
+  </div>
 </header>
 
 <main id="main" class="grid">
@@ -93,6 +99,22 @@
         </ul>
         <p class="hero-note">Ten markets: United States, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe. Free, private, runs on your computer. Education, not financial advice.</p>
         </div>
+      </section>
+      <section class="ask" id="ask" aria-labelledby="ask-h">
+        <div class="ask-head">
+          <span class="ask-cat" data-tick="mini" aria-hidden="true"></span>
+          <div>
+            <h2 id="ask-h">Ask Tick about money and markets</h2>
+            <p class="small ask-mode">Checking how I can answer…</p>
+          </div>
+        </div>
+        <div class="ask-chips" id="home-chips" aria-label="Suggested questions"></div>
+        <form class="ask-form" id="home-ask-form" autocomplete="off">
+          <label for="home-ask-in" class="sr">Your question for Tick</label>
+          <input id="home-ask-in" maxlength="400" placeholder="Ask about a stock, a term, or how markets work…">
+          <button class="primary" type="submit">Ask</button>
+        </form>
+        <p class="fine">Tick answers in the panel at the bottom right, on every page. He reads Yahoo Finance, Google News, Bing News and Wikipedia. Not about money? He will point you to Google. Education, not financial advice.</p>
       </section>
       <h2 class="section-h" id="wire-top">Today's wire: <span id="mkt-name">United States</span></h2>
       <p class="mkt-note small" id="mkt-note" hidden></p>
@@ -164,6 +186,15 @@
       </div>
       <div id="filings-body"></div>
     </div>
+
+    <div class="view" id="view-memory">
+      <div class="intro">
+        <p class="eyebrow">Tick remembers</p>
+        <h1>What Tick knows about you, all on one page.</h1>
+        <p class="lede">You can read it, change it, export it or delete it. It is one small file on this computer. It is never sent to a search engine or an AI service.</p>
+      </div>
+      <div id="memory-body"></div>
+    </div>
   </section>
 
   <aside class="col-rail" aria-label="Side rail">
@@ -182,6 +213,47 @@
     <p class="fine">Education, not advice. Data comes from public feeds and can be delayed or wrong. Runs on your machine, no account, no tracking.</p>
   </aside>
 </main>
+
+<button class="fab" id="tick-fab" aria-label="Open Tick, your finance helper" aria-expanded="false" aria-controls="tick-pop">
+  <span class="fab-cat" data-tick="mini" aria-hidden="true"></span>
+  <span class="fab-hint" aria-hidden="true">Ask Tick</span>
+</button>
+
+<section class="tickpop" id="tick-pop" role="dialog" aria-modal="false" aria-labelledby="tp-title" hidden>
+  <header class="tp-head">
+    <span class="tp-cat" data-tick="mini" aria-hidden="true"></span>
+    <div class="tp-title"><h2 id="tp-title">Tick</h2><p class="small">Your finance helper</p></div>
+    <button class="ghost" id="tp-close" type="button" aria-label="Close Tick">Close</button>
+  </header>
+  <div class="tp-tabs" role="tablist" aria-label="What Tick can do">
+    <button role="tab" id="tp-tab-ask" aria-controls="tp-ask" aria-selected="true" data-tp="ask" type="button">Ask</button>
+    <button role="tab" id="tp-tab-mine" aria-controls="tp-mine" aria-selected="false" data-tp="mine" type="button" tabindex="-1">Remembers</button>
+    <button role="tab" id="tp-tab-read" aria-controls="tp-read" aria-selected="false" data-tp="read" type="button" tabindex="-1">Read</button>
+  </div>
+  <div class="tp-body">
+    <div class="tp-panel" id="tp-ask" role="tabpanel" aria-labelledby="tp-tab-ask">
+      <div class="ask-log" id="ask-log" role="log" aria-live="polite" aria-label="Conversation with Tick"></div>
+      <div class="ask-chips" id="ask-chips" aria-label="Suggested questions"></div>
+      <form class="ask-form" id="ask-form" autocomplete="off">
+        <label for="ask-in" class="sr">Your question for Tick</label>
+        <input id="ask-in" maxlength="400" placeholder="Ask about a stock, a term, or how markets work…">
+        <button class="primary" id="ask-go" type="submit">Ask</button>
+      </form>
+      <p class="fine ask-mode"></p>
+    </div>
+    <div class="tp-panel" id="tp-mine" role="tabpanel" aria-labelledby="tp-tab-mine" hidden>
+      <div id="tp-mine-body"></div>
+    </div>
+    <div class="tp-panel" id="tp-read" role="tabpanel" aria-labelledby="tp-tab-read" hidden>
+      <p class="small">Paste an article, a filing excerpt or a link. Tick reads it with you and highlights the key numbers, red flags and jargon.</p>
+      <form class="tp-read-form" id="tp-read-form">
+        <label for="tp-read-in" class="sr">Article text or link</label>
+        <textarea id="tp-read-in" rows="9" placeholder="https://… or paste the text"></textarea>
+        <button class="primary" type="submit">Let Tick read it</button>
+      </form>
+    </div>
+  </div>
+</section>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 

@@ -214,7 +214,7 @@ def parse_feed(data):
                 d["summary"] = clean_text(c.text, 500)
             elif t in ("pubDate", "published", "updated", "date"):
                 d["ts"] = d["ts"] or parse_date(c.text)
-            elif t == "source":
+            elif t.lower() == "source":
                 d["source"] = clean_text(c.text)
         if d["title"] and d["link"].startswith(("http://", "https://")):
             out.append(d)
@@ -538,6 +538,10 @@ def analyze_quote(q, list_id):
         score -= 10
     if pb is not None and pb < 0:
         warn.append("Negative book value: the company owes more than it owns on paper. Common after big buybacks, but it means the P/B ratio tells you nothing here.")
+    if fpe and fpe > 35:
+        warn.append(f"Forward P/E of {fpe:.0f} means you are paying a lot for future growth. If growth disappoints, expensive stocks can fall hard.")
+    if pb and pb > 12:
+        warn.append(f"Price is {pb:.0f}x book value, so very little of the price is backed by assets on paper.")
     if vs200 is not None and vs200 < -15:
         warn.append(f"Sits {abs(vs200):.0f}% under its 200-day average. Downtrends can keep going: cheap can get cheaper.")
         score -= 6
