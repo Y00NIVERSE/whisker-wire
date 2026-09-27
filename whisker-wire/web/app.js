@@ -68,6 +68,8 @@ function glossNodes(text, seen = new Set()) {
     ? h("span", { class: "gl", tabindex: 0, "data-def": g.def, "aria-label": g.t + ": " + g.def }, g.t) : g.t));
 }
 const tip = (cls, text, def) => h("span", { class: "tagx tip " + cls, tabindex: 0, "data-def": def, "aria-label": text + ": " + def }, text);
+// A small mark on every link that leaves the app, so "Read here" reads as the one option that keeps you on Whisker Wire.
+const extIcon = () => h("span", { class: "ext-ic", "aria-hidden": "true", text: "↗" });
 
 // Send people to the primary source: the company's own filings on SEC.gov.
 const SEC_FORM = { "insider-buy": ["4", "Form 4 insider trades"], "insider-sell": ["4", "Form 4 insider trades"], activist: ["SCHEDULE 13D", "13D stake filings"] };
@@ -637,12 +639,13 @@ function storyEl(s, isNew) {
         s.tickers.map((t) => h("button", { class: "tk", title: "Show only " + t, onclick: () => { state.ticker = t; state.page.wire = 1; setView("wire"); renderWire(); } }, t)),
         s.signals.map((g) => h("span", { class: "sg sg-" + g.dir, text: g.label }))),
       h("div", { class: "acts" },
-        h("button", { class: "read", onclick: () => openReader({ story: s }) }, "Read with Tick"),
-        h("button", { onclick: () => askAbout(`What does this mean for the stock: ${s.title}`) }, "Ask Tick"),
+        h("button", { class: "read", title: "Open the full article right here, with Tick's highlights", onclick: () => openReader({ story: s }) },
+          h("span", { class: "read-t", text: "Read here" }), h("span", { class: "read-ic", "aria-hidden": "true", text: "→" })),
+        h("button", { class: "ext", onclick: () => askAbout(`What does this mean for the stock: ${s.title}`) }, "Ask Tick"),
         h("button", { class: "more-btn", "aria-label": "Show more about this story", onclick: (e) => { const on = e.target.closest(".story").classList.toggle("is-open"); e.target.textContent = on ? "Less" : "More"; } }, "More"),
-        sec && h("a", { href: sec.url, title: "The company's own filings, straight from the SEC" }, sec.label),
-        h("a", { href: s.link, title: isGoogle(s.link) ? "Opens through Google News, which then forwards you to the publisher" : "" }, isGoogle(s.link) ? "Original (via Google News)" : "Original"),
-        h("a", { href: "https://web.archive.org/web/2/" + s.link }, "Archive copy"),
+        sec && h("a", { class: "ext", href: sec.url, title: "The company's own filings, straight from the SEC" }, sec.label, extIcon()),
+        h("a", { class: "ext", href: s.link, title: isGoogle(s.link) ? "Opens through Google News, which then forwards you to the publisher" : "Leaves Whisker Wire and opens the publisher's own site" }, isGoogle(s.link) ? "Original (via Google News)" : "Original", extIcon()),
+        h("a", { class: "ext", href: "https://web.archive.org/web/2/" + s.link, title: "Leaves Whisker Wire and opens an archived copy" }, "Archive copy", extIcon()),
         h("button", { onclick: (e) => { const on = srcList.classList.toggle("is-on"); on ? state.openSrcs.add(s.id) : state.openSrcs.delete(s.id); e.target.setAttribute("aria-expanded", String(on)); }, "aria-expanded": String(open) },
           "Who reported it (" + s.n_pub + ")")),
       srcList));
