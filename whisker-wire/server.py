@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import engine
+import memory
+import tick_chat
 from markets import market_list, valid_market
 from signals import SIGNALS
 
@@ -36,6 +38,26 @@ def _health(market="us"):
     return {"sources": f["health"], "sec_configured": bool(engine.sec_agent())}
 
 
+def _post_sec(body):
+    try:
+        contact = engine.save_sec_contact(f"{body.get('name', '')} {body.get('email', '')}")
+    except ValueError:
+        raise ValueError("Enter your name and a real email address.")
+    return {"ok": True, "configured": True, "contact": contact}
+
+
+def _post_chat(body):
+    hist = body.get("history")
+    try:
+        mem = memory.for_chat()
+    except Exception:
+        mem = None   # a broken memory file must never stop Tick from answering
+    return tick_chat.answer(body.get("q", ""), body.get("market", "us"), hist if isinstance(hist, list) else None, mem)
+
+
+# path -> (largest body accepted in bytes, handler)
+POST_ROUTES = {"/api/sec-contact": (2048, _post_sec), "/api/chat": (8192, _post_chat), "/api/memory": (8192, memory.handle)}
+
 ROUTES = {
     "/api/feed": lambda q: engine.get_feed(_mk(q)),
     "/api/quotes": lambda q: engine.get_quotes(_mk(q)),
@@ -43,6 +65,8 @@ ROUTES = {
     "/api/markets": lambda q: {"markets": market_list()},
     "/api/filings": lambda q: engine.get_filings(),
     "/api/signals": lambda q: _signals(),
+    "/api/chat-status": lambda q: tick_chat.status(),
+    "/api/memory": lambda q: memory.get_all(),
     "/api/track": lambda q: engine.get_track(),
     "/api/health": lambda q: _health(_mk(q)),
     "/api/ticker": lambda q: engine.get_ticker(q.get("symbol", [""])[0]),
@@ -73,26 +97,34 @@ class Handler(BaseHTTPRequestHandler):
         return host in ("127.0.0.1", "localhost", "::1")
 
     def do_POST(self):
-        # The only write: saving the contact the SEC requires. Guarded against cross-site requests:
-        # same-origin only, JSON only (a cross-origin page cannot send that without a preflight we never grant).
+        # The only writes and paid lookups: saving the SEC contact and asking Tick. Guarded against cross-site
+        # requests: same-origin only, JSON only (a cross-origin page cannot send that without a preflight we never grant).
         if not self._host_ok():
             return self._json(403, {"error": "forbidden host"})
         origin = self.headers.get("Origin")
         if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
             return self._json(403, {"error": "cross-site request refused"})
-        if urllib.parse.urlparse(self.path).path != "/api/sec-contact":
+        route = POST_ROUTES.get(urllib.parse.urlparse(self.path).path)
+        if not route:
             return self._json(404, {"error": "unknown endpoint"})
+        limit, fn = route
         if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
             return self._json(415, {"error": "send JSON"})
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            if not 0 < n <= 2048:
+            if not 0 < n <= limit:
                 raise ValueError("bad size")
             body = json.loads(self.rfile.read(n))
-            contact = engine.save_sec_contact(f"{body.get('name', '')} {body.get('email', '')}")
-        except (ValueError, TypeError, AttributeError) as e:
-            return self._json(400, {"error": str(e) if isinstance(e, ValueError) and "email" in str(e) else "Enter your name and a real email address."})
-        return self._json(200, {"ok": True, "configured": True, "contact": contact})
+            if not isinstance(body, dict):
+                raise ValueError("bad body")
+        except (ValueError, TypeError):
+            return self._json(400, {"error": "Send a small JSON object."})
+        try:
+            return self._json(200, fn(body))
+        except ValueError as e:
+            return self._json(400, {"error": str(e)})
+        except Exception:
+            return self._json(502, {"error": "Tick could not reach her sources just now. Try again in a moment."})
 
     def do_GET(self):
         if not self._host_ok():

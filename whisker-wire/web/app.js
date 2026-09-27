@@ -92,8 +92,11 @@ const state = {
   watch: new Set(store.get("watch", [])),
   off: new Set(store.get("kindsOff", [])), allKinds: new Set(),   // source types switched off; new types default to on
   feed: null, picks: null, radarList: "all", seen: null, openSrcs: new Set(), filings: null,
+  mem: null, drift: {}, editing: null,
   signals: null, showSells: false, openCalc: new Set(),
+  revealed: new Set(),   // keys of cards that have already played their reveal + count-up once this session
 };
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const kindOn = (k) => !state.off.has(k);
 const marketInfo = () => state.markets.find((m) => m.id === state.market) || { id: "us", name: "United States", filings: [], note: "" };
 
@@ -122,6 +125,7 @@ function setView(v) {
   $$(".view").forEach((s) => s.classList.toggle("is-on", s.id === "view-" + v));
   if (v === "radar" && !state.picks) loadRadar();
   if (v === "filings") loadFilings();
+  if (v === "memory") loadMemory();
   window.scrollTo({ top: 0 });
 }
 $$(".tab[data-view]").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
@@ -137,6 +141,7 @@ function renderMarkets() {
   // On a phone the row scrolls sideways: keep the selected market in view so people can see where they are.
   const row = $("#markets"), on = $("#markets .mkt.is-on");
   if (on) row.scrollTo({ left: Math.max(0, on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2) });
+  refreshStarters();
   const note = $("#mkt-note");
   note.textContent = marketInfo().note || "";
   note.hidden = !marketInfo().note;
@@ -162,7 +167,7 @@ function setMarket(id) {
 async function initMarket() {
   try {
     state.markets = (await api("/api/markets")).markets;
-    const want = new URLSearchParams(location.search).get("market") || store.get("market", "us");
+    const want = new URLSearchParams(location.search).get("market") || store.get("market", null) || state.mem?.markets?.[0] || "us";
     state.market = state.markets.some((m) => m.id === want) ? want : "us";
   } catch { state.markets = []; }
   renderMarkets();
@@ -189,6 +194,330 @@ function setHero(open) {
 }
 setHero(store.get("heroOpen", true));
 heroBtn.addEventListener("click", () => setHero(heroMore.hidden));
+
+/* ------------------------------------------------------------ Tick remembers */
+// The watchlist lives on the server (so Tick can use it) with a spare copy in the browser.
+function commitWatch() {
+  store.set("watch", [...state.watch]);
+  postJson("/api/memory", { op: "watch_set", symbols: [...state.watch] })
+    .then((m) => { state.mem = m; if (state.view === "memory") renderMemory(); })
+    .catch(() => { /* the local copy still works */ });
+}
+
+async function memOp(body) {
+  const m = await postJson("/api/memory", body);
+  state.mem = m;
+  state.watch = new Set(m.watchlist);
+  store.set("watch", m.watchlist);
+  refreshStarters();   // "How are my stocks doing?" appears once there is something to ask about
+  renderTickMine();
+  return m;
+}
+
+async function loadMemory() {
+  try {
+    const m = await api("/api/memory");
+    state.mem = m;
+    const local = store.get("watch", []);
+    if (!m.watchlist.length && local.length) await memOp({ op: "watch_set", symbols: local });   // one-time move from this browser
+    else { state.watch = new Set(m.watchlist); store.set("watch", m.watchlist); }
+    if (state.feed) renderWire();
+    if (state.view === "memory") renderMemory();
+  } catch { /* the app works without memory */ }
+}
+
+const dateOf = (ts) => new Date(ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+const EXPERIENCE = [["beginner", "New to this"], ["some", "Some experience"], ["experienced", "Experienced"]];
+
+function memAbout(m) {
+  const save = async (experience, markets) => { try { await memOp({ op: "profile", experience, markets }); renderMemory(); renderMarkets(); } catch (e) { flash(e.message); } };
+  return h("section", { class: "mem-sec" },
+    h("h2", { class: "subhead", text: "About you" }),
+    h("p", { class: "small", text: "New to this adds plain-English explanations to Tick's answers. The markets you follow are preferred when Tick works out which listing you mean, and set your starting market." }),
+    h("p", { class: "eyebrow gap", text: "Experience" }),
+    h("div", { class: "chips" }, EXPERIENCE.map(([v, label]) => h("button", { class: "chip" + (m.experience === v ? " is-on" : ""), "aria-pressed": String(m.experience === v), onclick: () => save(m.experience === v ? "" : v, m.markets) }, label))),
+    h("p", { class: "eyebrow gap", text: "Markets I follow" }),
+    h("div", { class: "chips" }, state.markets.map((k) => { const on = m.markets.includes(k.id); return h("button", { class: "chip" + (on ? " is-on" : ""), "aria-pressed": String(on), onclick: () => save(m.experience || "", on ? m.markets.filter((x) => x !== k.id) : [...m.markets, k.id]) }, k.name); })));
+}
+
+function memWatch(m) {
+  const input = h("input", { type: "text", placeholder: "Add a ticker, e.g. NVDA or 0700.HK", maxlength: "14", "aria-label": "Add a ticker to your watchlist", spellcheck: "false" });
+  const msg = h("p", { class: "small", role: "status" });
+  const set = async (symbols) => { try { await memOp({ op: "watch_set", symbols }); if (state.feed) renderWire(); renderMemory(); } catch (e) { msg.textContent = e.message; } };
+  return h("section", { class: "mem-sec" },
+    h("h2", { class: "subhead", text: "My watchlist" }),
+    h("p", { class: "small", text: "The same list as on the wire. Ask Tick \"How are my stocks doing?\" and she will use it." }),
+    m.watchlist.length ? h("div", { class: "chips" }, m.watchlist.map((s) => h("button", { class: "wtag", title: "Remove " + s, onclick: () => set(m.watchlist.filter((x) => x !== s)) }, s))) : h("p", { class: "small", text: "Nothing on your watchlist yet." }),
+    h("form", { class: "mem-form row", onsubmit: (e) => { e.preventDefault(); const v = input.value.trim().toUpperCase(); if (v) set([...m.watchlist, v]); } }, input, h("button", { class: "ghost", type: "submit" }, "Add")),
+    msg);
+}
+
+function driftEl(d) {
+  return h("div", { class: "drift st-" + d.status },
+    h("div", { class: "drift-head" }, h("span", { class: "drift-badge", text: d.label }), h("span", { class: "small mono", text: `${d.points} point${d.points === 1 ? "" : "s"} · checked ${ago(d.checked)}` })),
+    d.breakdown.length ? h("ul", { class: "calc-list" }, d.breakdown.map((b) => h("li", {}, h("span", { text: b.label }), h("b", { class: "cn", text: "+" + b.pts })))) : h("p", { class: "small", text: "Nothing has moved against your reasons." }),
+    h("ul", { class: "facts-list" }, d.facts.map((f) => h("li", { text: f }))),
+    d.news.length > 0 && [h("p", { class: "blk-t", text: "Negative headlines since you wrote it" }), h("ul", { class: "news" }, d.news.map((n) => h("li", {}, h("a", { href: n.url }, n.title), h("span", { class: "nm", text: n.publisher || "" }))))],
+    h("p", { class: "small", text: "4 or more points is under pressure, 2 to 3 is worth a look. Every point has a stated cause. This is a prompt to re-read your note, not a sell signal." }));
+}
+
+async function runDrift(t, btn) {
+  btn.disabled = true; btn.textContent = "Checking…";
+  try { const r = await memOp({ op: "check", id: t.id }); state.drift[t.id] = r.drift; } catch (err) { flash(err.message); }
+  renderMemory(); renderTickMine();
+}
+
+const snapLine = (t) => {
+  const s = t.snap;
+  if (!s) return "No numbers were saved with this note.";
+  const bits = [`price ${fmt.px(s.price, s.currency)}`];
+  if (s.fpe) bits.push(`forward P/E ${s.fpe.toFixed(1)}`);
+  if (s.rating) bits.push(`analysts ${s.rating.split(" - ").pop()}`);
+  if (s.score != null) bits.push(`value read ${s.score}/100`);
+  return "When you wrote it: " + bits.join(", ") + ".";
+};
+
+function memTheses(m) {
+  const editing = m.theses.find((t) => t.id === state.editing);
+  const f = {
+    symbol: h("input", { type: "text", placeholder: "Ticker, e.g. TSLA or 0700.HK", maxlength: "12", "aria-label": "Ticker", spellcheck: "false", disabled: !!editing, value: editing?.symbol || "" }),
+    note: h("textarea", { rows: "3", maxlength: String(m.limits.note), placeholder: "Why do you own or watch it? One or two sentences, in your own words.", "aria-label": "Your reason" }, editing?.note || ""),
+    inv: h("input", { type: "text", maxlength: String(m.limits.invalidate_if), placeholder: "I would rethink if… (optional, e.g. sales fall two quarters in a row)", "aria-label": "What would change your mind", value: editing?.invalidate_if || "" }),
+    below: h("input", { type: "number", step: "any", min: "0", placeholder: "Review if below (price)", "aria-label": "Review below price", value: editing?.review_below ?? "" }),
+    above: h("input", { type: "number", step: "any", min: "0", placeholder: "Review if above (price)", "aria-label": "Review above price", value: editing?.review_above ?? "" }),
+  };
+  const msg = h("p", { class: "small", role: "status" });
+  const submit = async (e) => {
+    e.preventDefault();
+    msg.textContent = editing ? "Saving…" : "Saving, and noting today's price…";
+    try {
+      await memOp({ op: "thesis_save", id: editing?.id, symbol: f.symbol.value, note: f.note.value, invalidate_if: f.inv.value, review_below: f.below.value, review_above: f.above.value });
+      state.editing = null; flash("Note saved."); renderMemory();
+    } catch (err) { msg.textContent = err.message; }
+  };
+  const card = (t) => {
+    const cur = t.snap?.currency || "USD";
+    const lines = [t.invalidate_if && ["I would rethink if: ", t.invalidate_if], t.review_below && ["Review if the price falls to ", fmt.px(t.review_below, cur)], t.review_above && ["Review if the price rises to ", fmt.px(t.review_above, cur)]].filter(Boolean);
+    const check = h("button", { onclick: () => runDrift(t, check) }, state.drift[t.id] ? "Check again" : "Check drift");
+    return h("article", { class: "tcard" },
+      h("div", { class: "pk-head" }, h("span", { class: "pk-sym", text: t.symbol }), h("span", { class: "pk-name", text: t.name || "" }), h("span", { class: "small mono", text: `written ${dateOf(t.created)}` })),
+      h("p", { class: "tc-note", text: t.note }),
+      lines.map(([a, b]) => h("p", { class: "small" }, h("b", { text: a }), b)),
+      h("p", { class: "small mono", text: snapLine(t) }),
+      h("div", { class: "pk-acts" }, check,
+        h("button", { onclick: () => { state.editing = t.id; renderMemory(); $("#memory-body .mem-form.thesis")?.scrollIntoView({ behavior: "smooth", block: "center" }); } }, "Edit"),
+        h("button", { onclick: async () => { if (!confirm(`Delete your note on ${t.symbol}?`)) return; try { await memOp({ op: "thesis_delete", id: t.id }); delete state.drift[t.id]; renderMemory(); } catch (err) { flash(err.message); } } }, "Delete")),
+      state.drift[t.id] && driftEl(state.drift[t.id]));
+  };
+  return h("section", { class: "mem-sec" },
+    h("h2", { class: "subhead", text: "My thesis notes" }),
+    h("p", { class: "small", text: "Write down why you own or watch something, and what would change your mind. Tick saves today's price and numbers with it, so later she can check whether your reasons still hold. Notes are never shared." }),
+    h("form", { class: "mem-form thesis", onsubmit: submit },
+      h("div", { class: "row" }, f.symbol), f.note, f.inv, h("div", { class: "row two" }, f.below, f.above),
+      h("div", { class: "row" }, h("button", { class: "primary", type: "submit" }, editing ? "Update note" : "Save note"), editing && h("button", { class: "ghost", type: "button", onclick: () => { state.editing = null; renderMemory(); } }, "Cancel")),
+      msg),
+    m.theses.length ? h("div", { class: "tlist" }, m.theses.map(card)) : h("p", { class: "small", text: "No notes yet." }));
+}
+
+function memData(m) {
+  return h("section", { class: "mem-sec" },
+    h("h2", { class: "subhead", text: "Your data" }),
+    h("p", { class: "small" }, "Stored in ", h("span", { class: "mono", text: m.location }), ". It is on this computer only, and outside the project folder so a cloud-synced folder does not copy it."),
+    h("div", { class: "chips" },
+      h("button", { class: "ghost", onclick: () => {
+        const a = h("a", { download: "tick-memory.json" });
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(m, null, 2)], { type: "application/json" }));
+        a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      } }, "Export everything"),
+      h("button", { class: "ghost danger", onclick: async () => {
+        if (!confirm("Forget everything Tick remembers about you: your profile, watchlist and all notes? This cannot be undone.")) return;
+        try { await memOp({ op: "forget", confirm: "forget" }); state.drift = {}; state.editing = null; if (state.feed) renderWire(); renderMemory(); flash("Done. Tick has forgotten everything."); } catch (e) { flash(e.message); }
+      } }, "Forget everything")));
+}
+
+function renderMemory() {
+  const m = state.mem, box = $("#memory-body");
+  if (!m) return fill(box, h("p", { class: "empty", text: "Tick's memory is not available right now." }));
+  fill(box, h("p", { class: "small mem-warn", text: "Please do not enter holdings amounts, account numbers or passwords. Tick does not need them." }), memAbout(m), memWatch(m), memTheses(m), memData(m));
+}
+
+/* ------------------------------------------------------------ Ask Tick (chat) */
+const ask = { history: [], busy: false, asked: false };
+const askLog = $("#ask-log"), askIn = $("#ask-in");
+const EXAMPLE_CO = { us: "Tesla", cn: "Alibaba", hk: "Tencent", sg: "DBS", uk: "Shell", jp: "Toyota", in: "Reliance", au: "BHP", ca: "Shopify", eu: "ASML" };
+const starterChips = () => [`What's moving in ${marketInfo().name} today?`, `Is ${EXAMPLE_CO[state.market] || "Tesla"} undervalued?`,
+  state.watch.size || state.mem?.theses?.length ? "How are my stocks doing?" : "What is a P/E ratio?", "How should a beginner start investing?"];
+
+function avatar() {
+  const a = h("span", { class: "msg-cat", "aria-hidden": "true" });
+  a.append($("#tick-tpl").content.cloneNode(true));
+  return a;
+}
+const bubble = (role, ...kids) => h("div", { class: "msg msg-" + role }, role === "tick" && avatar(), h("div", { class: "bubble" }, kids));
+
+function renderAskChips(list) {
+  fill($("#ask-chips"), ...list.map((q) => h("button", { class: "chip", type: "button", onclick: () => askTick(q) }, q)));
+}
+function renderHomeChips() {
+  fill($("#home-chips"), ...starterChips().map((q) => h("button", { class: "chip", type: "button", onclick: () => askTick(q) }, q)));
+}
+// The homepage bar always shows starter questions; the pop-out swaps to follow-ups once a conversation begins.
+function refreshStarters() { renderHomeChips(); if (!ask.asked) renderAskChips(starterChips()); }
+
+// Answers may quote web text, so they are built from DOM nodes only. [1] style citations become links to the sources.
+function richText(text, sources) {
+  const url = (n) => sources.find((s) => s.n === n)?.url;
+  const inline = (line) => line.split(/(\[\d+\])/).map((part) => {
+    const m = /^\[(\d+)\]$/.exec(part);
+    return m && url(+m[1]) ? h("a", { class: "cite", href: url(+m[1]), title: sources.find((s) => s.n === +m[1]).title }, part) : part;
+  });
+  const out = [];
+  let list = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) { list = null; continue; }
+    if (/^[-•]\s+/.test(line)) {
+      if (!list) { list = h("ul", {}); out.push(list); }
+      list.append(h("li", {}, inline(line.replace(/^[-•]\s+/, ""))));
+    } else { list = null; out.push(h("p", {}, inline(line))); }
+  }
+  return out;
+}
+
+function blockEl(b, sources) {
+  if (b.type === "p") return h("p", { text: b.text });
+  if (b.type === "note") return h("p", { class: "note", text: b.text });
+  if (b.type === "text") return richText(b.text, sources);
+  if (b.type === "stats") return h("dl", { class: "stats" }, b.items.map(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })]));
+  if (b.type === "ul") return [b.title && h("p", { class: "blk-t", text: b.title }), h("ul", {}, b.items.map((t) => h("li", { text: t })))];
+  if (b.type === "news") {
+    return [h("p", { class: "blk-t", text: b.title }), h("ul", { class: "news" }, b.items.map((n) => h("li", {},
+      h("a", { href: n.url }, n.title),
+      h("span", { class: "nm" }, (n.wire ? "Whisker Wire · " : "") + (n.publisher || ""),
+        (n.tags || []).map((t) => h("span", { class: "sg sg-" + (n.dir === "none" ? "flag" : n.dir), text: t }))))))];
+  }
+  return null;
+}
+
+function replyEl(r) {
+  const body = [r.blocks.map((b) => blockEl(b, r.sources || []))];
+  if (r.google) body.push(h("p", {}, h("a", { class: "ghost gbtn", href: r.google }, "Search Google for this")));
+  if (r.sources?.length) {
+    body.push(h("p", { class: "srcline" }, "Sources: ", r.sources.slice(0, 6).map((s) => h("a", { href: s.url, title: s.engine + ": " + s.title }, `[${s.n}] ${s.title.length > 32 ? s.title.slice(0, 30) + "…" : s.title}`))));
+  }
+  return bubble("tick", body);
+}
+
+const plain = (r) => r.blocks.map((b) => b.text || (b.items || []).map((i) => (typeof i === "string" ? i : i.title || i.join?.(" "))).join(" ")).join(" ").slice(0, 600);
+
+async function askTick(q) {
+  q = (q || "").trim();
+  if (!q || ask.busy) return;
+  openTick("ask");   // the conversation happens in Tick's pop-out, wherever the question came from
+  ask.busy = true; ask.asked = true;
+  $("#ask-go").disabled = true;
+  askIn.value = "";
+  askLog.append(bubble("user", h("p", { text: q })));
+  const wait = bubble("tick", h("span", { class: "typing", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "small", text: " Checking Yahoo Finance, Google News, Bing and Wikipedia…" }));
+  askLog.append(wait);
+  askLog.scrollTop = askLog.scrollHeight;
+  try {
+    const r = await postJson("/api/chat", { q, market: state.market, history: ask.history.slice(-6) });
+    ask.history.push({ role: "user", text: q }, { role: "tick", text: plain(r) });
+    const reply = replyEl(r);
+    wait.replaceWith(reply);
+    renderAskChips(r.followups || []);
+    // Show the start of the new answer, not its tail: people read from the top.
+    askLog.scrollTop += reply.getBoundingClientRect().top - askLog.getBoundingClientRect().top - 6;
+    return;
+  } catch (e) {
+    wait.replaceWith(bubble("tick", h("p", { text: e.message || "Something went wrong. Try again in a moment." })));
+    askLog.scrollTop = askLog.scrollHeight;
+  } finally {
+    ask.busy = false;
+    $("#ask-go").disabled = false;
+  }
+}
+
+function askAbout(q) {
+  askTick(q);
+}
+
+$("#home-ask-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const v = $("#home-ask-in").value;
+  if (v.trim()) { $("#home-ask-in").value = ""; askTick(v); }
+});
+
+$("#ask-form").addEventListener("submit", (e) => { e.preventDefault(); askTick(askIn.value); });
+
+async function initAsk() {
+  askLog.append(bubble("tick", h("p", { text: "Hi, I'm Tick. Ask me about a stock, a money term, or how markets work, and I'll look it up. If it isn't about money, I'll point you to Google." })));
+  refreshStarters();
+  let mode = "";
+  try {
+    const s = await api("/api/chat-status");
+    mode = s.smart
+      ? "Smart answers on: Claude reads live results from Yahoo Finance, Google News, Bing News and Wikipedia."
+      : "Basic mode: I search Yahoo Finance, Google News, Bing News and Wikipedia and sum up what I find. Add an Anthropic key for fuller answers (see the README).";
+  } catch { /* leave it blank */ }
+  $$(".ask-mode").forEach((n) => { n.textContent = mode; });
+}
+
+/* ------------------------------------------------------------ entrance motion (once per card, ever) */
+function countUp(el, target, ms = 650) {
+  if (!el) return;
+  if (reduceMotion.matches || !Number.isFinite(target)) { el.textContent = String(target); return; }
+  const t0 = performance.now();
+  const tick = (now) => {
+    const p = Math.min(1, (now - t0) / ms);
+    el.textContent = String(Math.round(target * (1 - (1 - p) ** 3)));   // ease-out cubic
+    if (p < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// Wraps a freshly built card: plays a rise-in the first time a key is seen, and skips straight to
+// the settled state on every later render (poll refreshes, page changes) so nothing keeps re-animating.
+function revealed(key, el, { countTo, countEl } = {}) {
+  if (state.revealed.has(key) || reduceMotion.matches) {
+    el.classList.add("reveal-done");
+    return el;
+  }
+  el.classList.add("reveal");
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      state.revealed.add(key);
+      requestAnimationFrame(() => el.classList.add("reveal-in"));
+      if (countEl && Number.isFinite(countTo)) { countEl.textContent = "0"; countUp(countEl, countTo); }
+      io.disconnect();
+    }
+  }, { rootMargin: "0px 0px -8% 0px", threshold: 0.15 });
+  io.observe(el);
+  return el;
+}
+
+/* ------------------------------------------------------------ the ticker tape (header) */
+function tapeItem(s) {
+  const dirCls = s.dir === "bull" ? "up" : s.dir === "bear" ? "down" : "flat";
+  return h("span", { class: "tape-item" },
+    h("b", { class: "mono", text: String(s.score) }),
+    s.tickers[0] && h("span", { class: "tape-tk mono", text: s.tickers[0] }),
+    h("span", { class: "tape-dir " + dirCls, "aria-hidden": "true", text: s.dir === "bull" ? "▲" : s.dir === "bear" ? "▼" : "•" }),
+    h("span", { class: "tape-t", text: s.title }));
+}
+
+function renderTape() {
+  const track = $("#tape-track");
+  if (!state.feed || !track) return;
+  const items = state.feed.stories.filter((s) => s.kinds.some(kindOn)).slice(0, 16);
+  if (!items.length) { $("#tape").hidden = true; return; }
+  $("#tape").hidden = false;
+  // two copies back to back so translateX(-50%) loops seamlessly; duration scales with content so speed stays steady
+  fill(track, items.map(tapeItem), items.map(tapeItem));
+  track.style.animationDuration = Math.max(26, items.length * 3.4) + "s";
+}
 
 /* ------------------------------------------------------------ pagination */
 function pageNumbers(cur, pages) {
@@ -245,7 +574,7 @@ function renderFilters() {
 }
 
 function renderWatching() {
-  const tags = [...state.watch].map((t) => h("button", { class: "wtag", title: "Remove " + t, onclick: () => { state.watch.delete(t); store.set("watch", [...state.watch]); renderWire(); } }, t));
+  const tags = [...state.watch].map((t) => h("button", { class: "wtag", title: "Remove " + t, onclick: () => { state.watch.delete(t); commitWatch(); renderWire(); } }, t));
   if (state.ticker) tags.unshift(h("button", { class: "wtag", title: "Clear ticker filter", onclick: () => { state.ticker = null; state.page.wire = 1; renderWire(); } }, "Showing " + state.ticker));
   if (state.watch.size) tags.unshift(h("span", { class: "wlabel", text: "Watching" }));
   fill($("#watching"), ...tags);
@@ -285,7 +614,7 @@ function storyEl(s, isNew) {
   const scoreBtn = h("button", { class: "scorebtn", "aria-expanded": String(calcOpen), title: "Click to see how this score was built",
     "aria-label": `${s.score} points. Show how it was built.`,
     onclick: () => { const on = calc.classList.toggle("is-on"); on ? state.openCalc.add(s.id) : state.openCalc.delete(s.id); scoreBtn.setAttribute("aria-expanded", String(on)); } },
-  h("span", { class: "n", text: s.score }), h("span", { class: "pts", text: "pts" }));
+  h("span", { class: "n", text: String(s.score) }), h("span", { class: "pts", text: "pts" }));
   const srcList = h("ul", { class: "srcs" + (open ? " is-on" : "") },
     s.links.map((l) => h("li", {}, h("a", { href: l.url }, l.publisher), isGoogle(l.url) ? " (via Google News)" : "", " · " + l.title)));
   const sec = secLink(s);
@@ -309,6 +638,7 @@ function storyEl(s, isNew) {
         s.signals.map((g) => h("span", { class: "sg sg-" + g.dir, text: g.label }))),
       h("div", { class: "acts" },
         h("button", { class: "read", onclick: () => openReader({ story: s }) }, "Read with Tick"),
+        h("button", { onclick: () => askAbout(`What does this mean for the stock: ${s.title}`) }, "Ask Tick"),
         h("button", { class: "more-btn", "aria-label": "Show more about this story", onclick: (e) => { const on = e.target.closest(".story").classList.toggle("is-open"); e.target.textContent = on ? "Less" : "More"; } }, "More"),
         sec && h("a", { href: sec.url, title: "The company's own filings, straight from the SEC" }, sec.label),
         h("a", { href: s.link, title: isGoogle(s.link) ? "Opens through Google News, which then forwards you to the publisher" : "" }, isGoogle(s.link) ? "Original (via Google News)" : "Original"),
@@ -325,7 +655,10 @@ function renderWire() {
   state.page.wire = Math.min(state.page.wire, pages);
   const newIds = state.newIds || new Set();
   const from = (state.page.wire - 1) * PER.wire;
-  fill($("#wire-list"), ...list.slice(from, from + PER.wire).map((s) => storyEl(s, newIds.has(s.id))));
+  fill($("#wire-list"), ...list.slice(from, from + PER.wire).map((s) => {
+    const card = storyEl(s, newIds.has(s.id));
+    return revealed("wire:" + s.id, card, { countTo: s.score, countEl: card.querySelector(".scorebtn .n") });
+  }));
   renderPager($("#wire-pager"), list.length, "wire", PER.wire, () => { renderWire(); toTopOf($("#wire-top")); });
   $("#wire-empty").hidden = list.length > 0;
   $("#wire-empty").textContent = emptyText();
@@ -363,7 +696,7 @@ function renderKinds() {
   $("#src-count").textContent = `${kinds.filter(kindOn).length}/${kinds.length}`;
   fill($("#kinds"), ...kinds.map((k) => h("button", {
     class: "chip" + (kindOn(k) ? " is-on" : ""), "aria-pressed": String(kindOn(k)),
-    onclick: () => { kindOn(k) ? state.off.add(k) : state.off.delete(k); store.set("kindsOff", [...state.off]); state.page.wire = 1; renderKinds(); renderWire(); },
+    onclick: () => { kindOn(k) ? state.off.add(k) : state.off.delete(k); store.set("kindsOff", [...state.off]); state.page.wire = 1; renderKinds(); renderWire(); renderTape(); },
   }, k)));
 }
 
@@ -388,7 +721,7 @@ async function loadFeed() {
     }
     state.feed = feed;
     feed.stories.forEach((s) => s.kinds.forEach((k) => state.allKinds.add(k)));
-    renderKinds(); renderWire(); renderHealth(feed);
+    renderKinds(); renderWire(); renderHealth(feed); renderTape();
     live.className = "live ok";
     $("#updated").textContent = "Live · " + feed.stories.length + " stories · " + ago(feed.generated);
     $("#updated").dataset.ts = feed.generated;
@@ -414,6 +747,7 @@ function announce(fresh) {
   }
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { document.title = BASE_TITLE; loadFeed(); loadQuotes(); } });
+document.addEventListener("visibilitychange", () => { const t = $("#tape-track"); if (t) t.style.animationPlayState = document.hidden ? "paused" : "running"; });   // do not spend battery animating a tab nobody is looking at
 
 $("#watch-form").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -421,7 +755,7 @@ $("#watch-form").addEventListener("submit", (e) => {
   if (!v) return flash("Type a ticker symbol first, like NVDA.");
   $("#watch-in").value = "";
   if (state.watch.has(v)) return flash(`${v} is already on your watchlist.`);
-  state.watch.add(v); store.set("watch", [...state.watch]);
+  state.watch.add(v); commitWatch();
   const n = state.feed ? state.feed.stories.filter((s) => s.tickers.includes(v)).length : 0;
   renderWire();
   flash(n ? `${v} added. ${n} ${n === 1 ? "story mentions" : "stories mention"} it right now: see "My tickers".`
@@ -537,7 +871,7 @@ function pickEl(p) {
       h("span", { class: "pk-px" }, fmt.px(p.price, p.currency) + " ", h("span", { class: dirClass(p.chg), text: fmt.pct(p.chg) })),
       h("span", { class: "pk-list", text: p.list_label })),
     h("div", { class: "scoreblock" },
-      h("div", { class: "n" }, String(p.score), h("small", { text: "/100" })),
+      h("div", { class: "n" }, h("span", { text: String(p.score) }), h("small", { text: "/100" })),
       h("div", { class: "meter", role: "img", "aria-label": "Value score " + p.score + " out of 100" }, h("i", { style: { transform: `scaleX(${p.score / 100})`, background: tier === "hi" ? "var(--bull)" : tier === "mid" ? "var(--alert)" : "var(--ink-2)" } })),
       h("div", { class: "cap", text: tier === "hi" ? "Strong value case" : tier === "mid" ? "Worth a look" : "Weak case" })),
     h("div", {}, h("div", { class: "metrics" },
@@ -565,7 +899,7 @@ function pickEl(p) {
         }
       } }, "Chart and news"),
       h("button", { onclick: () => { state.ticker = p.symbol; state.filter = "all"; state.page.wire = 1; setView("wire"); renderWire(); } }, "Filter the wire"),
-      h("button", { onclick: () => { state.watch.add(p.symbol); store.set("watch", [...state.watch]); flash(p.symbol + " added to your watchlist."); renderWire(); } }, "Watch")),
+      h("button", { onclick: () => { state.watch.add(p.symbol); commitWatch(); flash(p.symbol + " added to your watchlist."); renderWire(); } }, "Watch")),
     detail);
 }
 
@@ -576,7 +910,10 @@ function renderRadar() {
   const pages = Math.max(1, Math.ceil(rows.length / PER.radar));
   state.page.radar = Math.min(state.page.radar, pages);
   const from = (state.page.radar - 1) * PER.radar;
-  fill($("#radar-list"), ...(rows.length ? rows.slice(from, from + PER.radar).map(pickEl) : [h("p", { class: "empty", text: "Nothing in this list right now." })]));
+  fill($("#radar-list"), ...(rows.length ? rows.slice(from, from + PER.radar).map((p) => {
+    const card = pickEl(p);
+    return revealed("radar:" + p.symbol + ":" + p.list, card, { countTo: p.score, countEl: card.querySelector(".scoreblock .n > span") });
+  }) : [h("p", { class: "empty", text: "Nothing in this list right now." })]));
   renderPager($("#radar-pager"), rows.length, "radar", PER.radar, () => { renderRadar(); toTopOf($("#view-radar")); });
 }
 
@@ -663,6 +1000,8 @@ function wake() {
 
 function openReader(opts = {}) {
   reader.open = true;
+  document.body.classList.add("reader-open");
+  if (typeof closeTick === "function") closeTick(false);
   const d = $("#reader");
   d.classList.add("is-open"); d.setAttribute("aria-hidden", "false");
   $("#scrim").hidden = false;
@@ -674,6 +1013,7 @@ function openReader(opts = {}) {
 }
 function closeReader() {
   reader.open = false;
+  document.body.classList.remove("reader-open");
   const d = $("#reader");
   d.classList.remove("is-open"); d.setAttribute("aria-hidden", "true");
   $("#scrim").hidden = true; catEl.hidden = true;
@@ -691,12 +1031,14 @@ function showPaste(on) {
 $("#mode-paste").addEventListener("click", () => showPaste(true));
 $("#mode-article").addEventListener("click", () => showPaste(false));
 
-$("#paste-go").addEventListener("click", async () => {
-  const v = $("#paste-in").value.trim();
-  if (!v) return;
+async function readInput(v) {
   if (/^https?:\/\/\S+$/i.test(v)) return loadUrl(v, "");
   const paras = v.split(/\n+/).map((x) => x.trim()).filter(Boolean);
   await render({ title: paras[0].length < 140 ? paras[0] : "Pasted text", url: "", paragraphs: paras.length > 1 ? paras.slice(paras[0].length < 140 ? 1 : 0) : paras });
+}
+$("#paste-go").addEventListener("click", async () => {
+  const v = $("#paste-in").value.trim();
+  if (v) await readInput(v);
 });
 
 // Tapping Tick folds her note away (handy on a phone) and brings it back.
@@ -911,10 +1253,107 @@ document.addEventListener("keydown", (e) => {
 });
 addEventListener("resize", () => { if (reader.open && reader.marks[reader.idx]) placeCat(reader.marks[reader.idx]); });
 
+/* ------------------------------------------------------------ Tick pops out (bottom right) */
+const fab = $("#tick-fab"), tickPop = $("#tick-pop");
+const tp = { open: false, tab: "ask" };
+const TP_TABS = ["ask", "mine", "read"];
+
+function showTickTab(name) {
+  if (!TP_TABS.includes(name)) return;
+  tp.tab = name;
+  for (const t of TP_TABS) {
+    const on = t === name;
+    const tab = $("#tp-tab-" + t);
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $("#tp-" + t).hidden = !on;
+  }
+  if (name === "mine") renderTickMine();
+}
+
+function openTick(tab) {
+  if (reader.open) return;
+  if (tab) showTickTab(tab);
+  if (tp.open) return;
+  tp.open = true;
+  tickPop.hidden = false;
+  fab.setAttribute("aria-expanded", "true");
+  fab.classList.add("is-open");
+  fab.classList.remove("hint");
+  requestAnimationFrame(() => { if (tp.tab === "ask") $("#ask-in").focus({ preventScroll: true }); });
+}
+
+function closeTick(refocus = true) {
+  if (!tp.open) return;
+  tp.open = false;
+  tickPop.hidden = true;
+  fab.setAttribute("aria-expanded", "false");
+  fab.classList.remove("is-open");
+  if (refocus) fab.focus({ preventScroll: true });
+}
+
+fab.addEventListener("click", () => {
+  fab.classList.remove("pop"); void fab.offsetWidth; fab.classList.add("pop");   // a little bounce: he is happy to see you
+  tp.open ? closeTick(false) : openTick();
+});
+$("#tp-close").addEventListener("click", () => closeTick());
+$$(".tp-tabs [role=tab]").forEach((b) => b.addEventListener("click", () => showTickTab(b.dataset.tp)));
+$(".tp-tabs").addEventListener("keydown", (e) => {
+  const i = TP_TABS.indexOf(tp.tab);
+  const next = e.key === "ArrowRight" ? i + 1 : e.key === "ArrowLeft" ? i - 1 : e.key === "Home" ? 0 : e.key === "End" ? TP_TABS.length - 1 : null;
+  if (next == null) return;
+  e.preventDefault();
+  showTickTab(TP_TABS[(next + TP_TABS.length) % TP_TABS.length]);
+  $("#tp-tab-" + tp.tab).focus();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tp.open && !reader.open) closeTick(); });
+
+// Remembers: a compact view of what he knows, with quick drift checks. Editing happens on the full page.
+function renderTickMine() {
+  const box = $("#tp-mine-body"), m = state.mem;
+  if (!box) return;
+  if (!m) return fill(box, h("p", { class: "small", text: "Tick's memory is not available right now." }));
+  const you = [EXPERIENCE.find(([v]) => v === m.experience)?.[1], m.markets.length ? "follows " + m.markets.map((id) => state.markets.find((x) => x.id === id)?.name || id).join(", ") : null].filter(Boolean);
+  const noteRow = (t) => {
+    const btn = h("button", { class: "ghost", onclick: () => runDrift(t, btn) }, state.drift[t.id] ? "Check again" : "Check drift");
+    return h("div", { class: "tp-note" },
+      h("div", { class: "pk-head" }, h("span", { class: "pk-sym", text: t.symbol }), h("span", { class: "small mono", text: `written ${dateOf(t.created)}` })),
+      h("p", { class: "small", text: t.note.length > 130 ? t.note.slice(0, 127) + "…" : t.note }),
+      btn, state.drift[t.id] && driftEl(state.drift[t.id]));
+  };
+  fill(box,
+    h("p", { class: "small", text: you.length ? "You told Tick: " + you.join(" · ") : "You have not told Tick about yourself yet." }),
+    m.watchlist.length > 0 && [h("p", { class: "blk-t", text: "Your watchlist" }),
+      h("div", { class: "chips" }, m.watchlist.map((s) => h("span", { class: "tk", text: s }))),
+      h("p", {}, h("button", { class: "chip", onclick: () => { showTickTab("ask"); askTick("How are my stocks doing?"); } }, "How are my stocks doing?"))],
+    m.theses.length
+      ? [h("p", { class: "blk-t", text: "Thesis notes" }), h("div", { class: "tp-notes" }, m.theses.map(noteRow))]
+      : h("p", { class: "small", text: "No thesis notes yet. Write why you own or watch a stock, and Tick can tell you later whether your reasons still hold." }),
+    h("p", {}, h("button", { class: "ghost", onclick: () => { closeTick(false); setView("memory"); } }, "See and edit everything")));
+}
+
+$("#tp-read-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const v = $("#tp-read-in").value.trim();
+  if (!v) return;
+  $("#tp-read-in").value = "";
+  openReader({});          // the reader has its own Tick, so the pop-out closes
+  showPaste(false);
+  await readInput(v);
+});
+
+// First visit: a little speech bubble says who he is, then tucks away.
+if (!store.get("fabSeen", false)) {
+  fab.classList.add("hint");
+  setTimeout(() => { fab.classList.remove("hint"); store.set("fabSeen", true); }, 9000);
+}
+
 /* ------------------------------------------------------------ boot */
 mountTicks();
 syncAlerts();
-initMarket().then(() => { loadQuotes(); loadFeed(); });
+initAsk();
+// Tick's memory is a fast local call, so load it first: it can set the starting market and the watchlist.
+loadMemory().finally(() => initMarket().then(() => { loadQuotes(); loadFeed(); }));
 setInterval(loadFeed, 60000);
 setInterval(loadQuotes, 45000);
 setInterval(() => {

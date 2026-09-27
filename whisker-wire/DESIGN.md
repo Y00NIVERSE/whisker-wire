@@ -66,6 +66,35 @@ with a sticky segmented switch (Wire / Radar / Filings).
 - Currency is always shown with its symbol; London prices are in pence and say so. FX pairs in the strip are neutral (no
   green or red), since a rising USD/CNY is not good or bad news.
 
+### Tick pops out (bottom right)
+
+- A round, ink-outlined button with Tick's portrait, fixed bottom-right on every page. It has a hard offset shadow like the
+  chat bubbles, gives a small bounce on click, and on a first visit shows an "Ask Tick" speech bubble that tucks away.
+- The panel grows out of that corner (scale and rise from the bottom-right, 260ms, none under reduced motion). It is not
+  modal: the page stays usable behind it, Esc closes it, and focus returns to Tick's button.
+- Three tabs, one job each: Ask (the conversation), Remembers (a read-only summary with drift checks; editing stays on the
+  full page), Read (paste text or a link, then hand off to the reader).
+- On a phone the panel spans the screen width and sits above the button. The button and panel hide while the reader is open.
+
+### Ask Tick (chat)
+
+- A bordered card directly under the intro, so it is on the first screen after the headline. Tick's small portrait heads
+  the card and each of her replies; the user's messages are solid ink bubbles, Tick's are paper bubbles with a hairline.
+- An answer is built from labelled blocks: a mono stats table, "why cheap" and "how it could go wrong" lists, news with
+  signal tags in the same green, red and violet as the wire, and numbered source links. The log opens at the top of a new
+  answer because people read from the top.
+- Off-topic questions get a short, warm refusal and a "Search Google for this" button. No emoji, no fake typing delay:
+  the three-dot indicator only shows while Tick is genuinely fetching.
+
+### Tick remembers
+
+- Plain, editorial, nothing hidden: four labelled sections (About you, My watchlist, My thesis notes, Your data), each
+  with one sentence saying what it changes. The storage path is printed in mono so "on this computer" is checkable.
+- The thesis-drift result reuses the wire's score-breakdown pattern: a status word, a total in points, and one line per
+  point with its cause. Status is shown by a left rule and a word (green Holding up, ink Worth a look, red Under
+  pressure), never colour alone. The wording always frames it as a prompt to re-read the note, not a verdict.
+- Destructive actions are red-outlined, ask for confirmation, and say what will be deleted.
+
 ## 6. Depth & Elevation
 
 Flat. Depth comes from paper vs surface tone and hairlines. One shadow exists, on the drawer and
