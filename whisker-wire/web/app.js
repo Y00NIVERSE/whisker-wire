@@ -29,8 +29,21 @@ const store = {
   set(k, v) { try { localStorage.setItem("ww:" + k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
 
+// Thrown for a 401 from someone who was never logged in (an anonymous visitor hit Ask Tick or Tick
+// remembers, the two features that need an account). Callers catch this specifically to open the
+// sign-up modal instead of showing a generic error; every other error still reads as a plain Error.
+class AuthRequired extends Error {}
+
+function handle401(r) {
+  if (r.status !== 401) return r;
+  // A session that was valid a moment ago and now isn't (revoked, or the refresh token finally expired)
+  // is a different case from never having logged in: reload rather than pop a confusing modal.
+  if (state.loggedIn) location.reload();
+  throw new AuthRequired("Please log in first.");
+}
+
 async function api(path) {
-  const r = await fetch(path, { cache: "no-store" });
+  const r = handle401(await fetch(path, { cache: "no-store" }));
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || "Request failed");
   return j;
@@ -56,7 +69,7 @@ const ago = (ts) => {
 };
 const dirClass = (n, invert) => (n == null || Math.abs(n) < 0.005 ? "flat" : (n > 0) !== !!invert ? "up" : "down");
 async function postJson(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = handle401(await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || "Request failed");
   return j;
@@ -97,6 +110,7 @@ const state = {
   mem: null, drift: {}, editing: null,
   signals: null, showSells: false, openCalc: new Set(),
   revealed: new Set(),   // keys of cards that have already played their reveal + count-up once this session
+  cloudMode: false, loggedIn: false,   // hosted mode only; local mode never sets either
 };
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const kindOn = (k) => !state.off.has(k);
@@ -197,23 +211,102 @@ function setHero(open) {
 setHero(store.get("heroOpen", true));
 heroBtn.addEventListener("click", () => setHero(heroMore.hidden));
 
+/* ------------------------------------------------------------ account (hosted mode only) */
+// Browsing the wire, Value Radar and filings never requires an account. Only two things do: asking
+// Tick anything, and Tick remembers. Both go through this one modal, wherever they were triggered from.
+let authOnSuccess = null;
+
+function openAuthModal(reason, onSuccess) {
+  authOnSuccess = onSuccess || null;
+  $("#auth-reason").hidden = !reason;
+  if (reason) $("#auth-reason").textContent = reason;
+  $("#auth-scrim").hidden = false;
+  $("#auth-modal").hidden = false;
+  $("#su-email").focus();
+}
+function closeAuthModal() {
+  $("#auth-scrim").hidden = true;
+  $("#auth-modal").hidden = true;
+  authOnSuccess = null;
+}
+async function handleAuthSuccess() {
+  const cb = authOnSuccess;
+  closeAuthModal();
+  await initAccount();
+  if (cb) cb(); else location.reload();
+}
+$("#auth-close").addEventListener("click", closeAuthModal);
+$("#auth-scrim").addEventListener("click", closeAuthModal);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#auth-modal").hidden) closeAuthModal(); });
+
+const authTabs = { signup: $("#tab-signup"), login: $("#tab-login") };
+const authForms = { signup: $("#signup-form"), login: $("#login-form") };
+function showAuthTab(which) {
+  for (const k in authForms) { authForms[k].hidden = k !== which; authTabs[k].setAttribute("aria-selected", String(k === which)); authTabs[k].tabIndex = k === which ? 0 : -1; }
+}
+authTabs.signup.addEventListener("click", () => showAuthTab("signup"));
+authTabs.login.addEventListener("click", () => showAuthTab("login"));
+
+$("#signup-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = e.target.querySelector(".auth-msg");
+  msg.textContent = "Creating your account…";
+  try {
+    const r = await postJson("/api/auth/signup", { email: $("#su-email").value, password: $("#su-pass").value, newsletter: $("#su-news").checked });
+    if (r.pending) { msg.textContent = r.message; return; }
+    await handleAuthSuccess();
+  } catch (err) { msg.textContent = err.message || "Something went wrong."; }
+});
+$("#login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = e.target.querySelector(".auth-msg");
+  msg.textContent = "Logging in…";
+  try {
+    await postJson("/api/auth/login", { email: $("#li-email").value, password: $("#li-pass").value });
+    await handleAuthSuccess();
+  } catch (err) { msg.textContent = err.message || "Something went wrong."; }
+});
+
+$("#login-btn").addEventListener("click", () => openAuthModal());
+$("#logout").addEventListener("click", async () => {
+  try { await postJson("/api/auth/logout", {}); } catch { /* clearing cookies client-side is not possible (HttpOnly); reload regardless */ }
+  location.reload();
+});
+
+async function initAccount() {
+  try {
+    const { email, cloud } = await api("/api/auth/me");
+    state.cloudMode = !!cloud;
+    state.loggedIn = !!email;
+    $("#login-btn").hidden = !cloud || state.loggedIn;
+    $("#account").hidden = !state.loggedIn;
+    if (state.loggedIn) $("#account-email").textContent = email;
+  } catch { /* not fatal: the app still works without the header reflecting this */ }
+}
+
 /* ------------------------------------------------------------ Tick remembers */
 // The watchlist lives on the server (so Tick can use it) with a spare copy in the browser.
 function commitWatch() {
-  store.set("watch", [...state.watch]);
-  postJson("/api/memory", { op: "watch_set", symbols: [...state.watch] })
-    .then((m) => { state.mem = m; if (state.view === "memory") renderMemory(); })
-    .catch(() => { /* the local copy still works */ });
+  store.set("watch", [...state.watch]);   // the local copy works even if the account call below fails
+  memOp({ op: "watch_set", symbols: [...state.watch] }).catch(() => { /* AuthRequired already opened the modal; anything else, the local copy still works */ });
 }
 
 async function memOp(body) {
-  const m = await postJson("/api/memory", body);
-  state.mem = m;
-  state.watch = new Set(m.watchlist);
-  store.set("watch", m.watchlist);
-  refreshStarters();   // "How are my stocks doing?" appears once there is something to ask about
-  renderTickMine();
-  return m;
+  try {
+    const m = await postJson("/api/memory", body);
+    state.mem = m;
+    state.watch = new Set(m.watchlist);
+    store.set("watch", m.watchlist);
+    refreshStarters();   // "How are my stocks doing?" appears once there is something to ask about
+    renderTickMine();
+    return m;
+  } catch (e) {
+    if (!(e instanceof AuthRequired)) throw e;
+    // Ask once, then finish the exact same request the moment login succeeds, so nothing typed is lost.
+    return new Promise((resolve, reject) => {
+      openAuthModal("Create a free account to save this.", () => { memOp(body).then(resolve, reject); });
+    });
+  }
 }
 
 async function loadMemory() {
@@ -225,7 +318,9 @@ async function loadMemory() {
     else { state.watch = new Set(m.watchlist); store.set("watch", m.watchlist); }
     if (state.feed) renderWire();
     if (state.view === "memory") renderMemory();
-  } catch { /* the app works without memory */ }
+  } catch (e) {
+    if (state.view === "memory") renderMemory();   // shows the "create a free account" prompt for AuthRequired
+  }
 }
 
 const dateOf = (ts) => new Date(ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
@@ -324,7 +419,9 @@ function memTheses(m) {
 function memData(m) {
   return h("section", { class: "mem-sec" },
     h("h2", { class: "subhead", text: "Your data" }),
-    h("p", { class: "small" }, "Stored in ", h("span", { class: "mono", text: m.location }), ". It is on this computer only, and outside the project folder so a cloud-synced folder does not copy it."),
+    m.cloud
+      ? h("p", { class: "small" }, "Stored under your account, tied to the email you logged in with. “Forget everything” below clears your watchlist and notes, but does not delete the account itself.")
+      : h("p", { class: "small" }, "Stored in ", h("span", { class: "mono", text: m.location }), ". It is on this computer only, and outside the project folder so a cloud-synced folder does not copy it."),
     h("div", { class: "chips" },
       h("button", { class: "ghost", onclick: () => {
         const a = h("a", { download: "tick-memory.json" });
@@ -337,9 +434,19 @@ function memData(m) {
       } }, "Forget everything")));
 }
 
+// Shown wherever a logged-out visitor reaches a feature that needs an account: Tick remembers, or Ask
+// Tick once she has replied with the "please log in" prompt. Clicking it reopens the exact same modal.
+function signInPrompt(text, reason) {
+  return h("div", { class: "signin-prompt" }, h("p", {}, text),
+    h("button", { class: "primary", onclick: () => openAuthModal(reason) }, "Create a free account"));
+}
+
 function renderMemory() {
   const m = state.mem, box = $("#memory-body");
-  if (!m) return fill(box, h("p", { class: "empty", text: "Tick's memory is not available right now." }));
+  if (!m) {
+    if (state.cloudMode && !state.loggedIn) return fill(box, signInPrompt("Create a free account to use Tick remembers: your watchlist, thesis notes and drift checks, kept under your account.", "Create a free account to use Tick remembers."));
+    return fill(box, h("p", { class: "empty", text: "Tick's memory is not available right now." }));
+  }
   fill(box, h("p", { class: "small mem-warn", text: "Please do not enter holdings amounts, account numbers or passwords. Tick does not need them." }), memAbout(m), memWatch(m), memTheses(m), memData(m));
 }
 
@@ -433,7 +540,13 @@ async function askTick(q) {
     askLog.scrollTop += reply.getBoundingClientRect().top - askLog.getBoundingClientRect().top - 6;
     return;
   } catch (e) {
-    wait.replaceWith(bubble("tick", h("p", { text: e.message || "Something went wrong. Try again in a moment." })));
+    if (e instanceof AuthRequired) {
+      wait.replaceWith(bubble("tick",
+        h("p", { text: "Create a free account and I'll answer that." }),
+        h("button", { class: "chip", type: "button", onclick: () => openAuthModal("Create a free account to ask Tick anything.", () => askTick(q)) }, "Create a free account")));
+    } else {
+      wait.replaceWith(bubble("tick", h("p", { text: e.message || "Something went wrong. Try again in a moment." })));
+    }
     askLog.scrollTop = askLog.scrollHeight;
   } finally {
     ask.busy = false;
@@ -1315,7 +1428,10 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tp.open 
 function renderTickMine() {
   const box = $("#tp-mine-body"), m = state.mem;
   if (!box) return;
-  if (!m) return fill(box, h("p", { class: "small", text: "Tick's memory is not available right now." }));
+  if (!m) {
+    if (state.cloudMode && !state.loggedIn) return fill(box, signInPrompt("Create a free account to use Tick remembers.", "Create a free account to use Tick remembers."));
+    return fill(box, h("p", { class: "small", text: "Tick's memory is not available right now." }));
+  }
   const you = [EXPERIENCE.find(([v]) => v === m.experience)?.[1], m.markets.length ? "follows " + m.markets.map((id) => state.markets.find((x) => x.id === id)?.name || id).join(", ") : null].filter(Boolean);
   const noteRow = (t) => {
     const btn = h("button", { class: "ghost", onclick: () => runDrift(t, btn) }, state.drift[t.id] ? "Check again" : "Check drift");
@@ -1354,6 +1470,7 @@ if (!store.get("fabSeen", false)) {
 /* ------------------------------------------------------------ boot */
 mountTicks();
 syncAlerts();
+initAccount();
 initAsk();
 // Tick's memory is a fast local call, so load it first: it can set the starting market and the watchlist.
 loadMemory().finally(() => initMarket().then(() => { loadQuotes(); loadFeed(); }));

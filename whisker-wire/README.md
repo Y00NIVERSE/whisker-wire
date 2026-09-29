@@ -8,6 +8,12 @@ python whisker-wire/server.py        # then open http://127.0.0.1:8787
 
 Python 3.10+, standard library only. No accounts, no analytics, no request logging. Binds to localhost.
 
+**Want to host this for other people, with free accounts and a mailing list?** See [DEPLOY.md](DEPLOY.md).
+That mode is opt-in (nothing changes unless you set it up). The wire, Value Radar and filings stay open
+to any visitor; a free account is only asked for at the two personal features, Ask Tick and Tick
+remembers, each kept separately per person, plus a newsletter checkbox at signup — the "no accounts"
+line above describes local mode only.
+
 ## What it does
 
 - **Ten markets**, chosen from the pills under the logo: United States, China, Hong Kong, Singapore, United Kingdom, Japan, India, Australia, Canada and Europe. Each has its own news feeds (81 in total: 42 outlets plus 39 targeted searches), index strip, tickers in the local format (`0700.HK`, `D05.SI`, `VOD.L`), prices in the local currency, and Value Radar. Your choice is remembered and can be shared as a link (`?market=hk`). China's state media outlets are labelled so you can weigh them or switch them off.
@@ -62,7 +68,7 @@ Urgent is 8 or more points and confirmed; Watch is 5 to 7 (or 8 or more but unco
 ## Development
 
 ```
-python -m unittest discover -s whisker-wire/tests -v     # offline tests (120)
+python -m unittest discover -s whisker-wire/tests -v     # offline tests (157)
 ```
 
 Design rules are in `DESIGN.md` (awesome-design-md format, with taste-skill dials).

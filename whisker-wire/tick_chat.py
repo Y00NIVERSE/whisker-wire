@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import deque
+from collections import defaultdict, deque
 from pathlib import Path
 
 import engine
@@ -831,26 +831,28 @@ def smart_answer(q, market, ents, ctx, history, mem=None):
 
 
 # ---------------------------------------------------------------- the front door
-_recent = deque()
+_recent = defaultdict(deque)   # one bucket per rate-limit key, so one busy visitor cannot lock out everyone else
 _rate_lock = threading.Lock()
 
 
-def rate_limit(limit=30, window=600, now=None):
-    """A local tool, but it spends API money and hits Yahoo: keep runaway loops in check."""
+def rate_limit(key="global", limit=30, window=600, now=None):
+    """Spends API money and hits Yahoo, so keep runaway loops in check. In hosted mode `key` is the
+    logged-in user's id; in local mode (one person, one computer) the default shared bucket is enough."""
     now = now or time.time()
     with _rate_lock:
-        while _recent and now - _recent[0] > window:
-            _recent.popleft()
-        if len(_recent) >= limit:
+        bucket = _recent[key]
+        while bucket and now - bucket[0] > window:
+            bucket.popleft()
+        if len(bucket) >= limit:
             raise ValueError("Whiskers need a rest: that is a lot of questions in a row. Try again in a few minutes.")
-        _recent.append(now)
+        bucket.append(now)
 
 
-def answer(question, market="us", history=None, mem=None):
+def answer(question, market="us", history=None, mem=None, rate_key=None):
     q = clean_question(question)
     if not q:
         raise ValueError("Ask me something first.")
-    rate_limit()
+    rate_limit(rate_key or "global")
     market = valid_market(market)
     want = intents(q)
     if "mine" in want:

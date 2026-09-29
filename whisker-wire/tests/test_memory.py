@@ -326,7 +326,7 @@ class InsideChat(Base):
 
     def test_a_broken_memory_never_stops_tick(self):
         with mock.patch.object(memory, "for_chat", side_effect=RuntimeError("corrupt")), mock.patch.object(tc, "answer", return_value={"ok": 1}) as a:
-            self.assertEqual(server._post_chat({"q": "hi"}), {"ok": 1})
+            self.assertEqual(server._post_chat({"q": "hi"}, None), {"ok": 1})
         self.assertIsNone(a.call_args[0][3])
 
 

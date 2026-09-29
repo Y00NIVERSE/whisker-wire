@@ -67,6 +67,8 @@
       <span class="live" id="live" role="status" aria-live="polite"><i class="dot"></i><span id="updated">Connecting</span></span>
       <button class="ghost" id="alerts" title="Get a desktop alert when something urgent lands">Alerts</button>
       <button class="ghost" id="theme" aria-label="Switch color theme">Theme</button>
+      <button class="ghost" id="login-btn" hidden>Log in</button>
+      <span class="account" id="account" hidden><span class="account-email" id="account-email"></span><button class="ghost" id="logout">Log out</button></span>
     </div>
   </div>
   <div class="markets-wrap">
@@ -253,6 +255,38 @@
       </form>
     </div>
   </div>
+</section>
+
+<div class="scrim" id="auth-scrim" hidden></div>
+<section class="auth-modal" id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-h" hidden>
+  <button class="ghost auth-close" id="auth-close" type="button" aria-label="Close">Close</button>
+  <p class="auth-reason" id="auth-reason" hidden></p>
+  <h2 id="auth-h" class="sr">Account</h2>
+  <div class="seg" role="tablist" aria-label="Sign up or log in">
+    <button role="tab" id="tab-signup" aria-selected="true" type="button">Create free account</button>
+    <button role="tab" id="tab-login" aria-selected="false" type="button" tabindex="-1">Log in</button>
+  </div>
+
+  <form id="signup-form" class="auth-form">
+    <label for="su-email">Email</label>
+    <input id="su-email" type="email" autocomplete="email" required maxlength="200">
+    <label for="su-pass">Password</label>
+    <input id="su-pass" type="password" autocomplete="new-password" required minlength="8" maxlength="200">
+    <p class="fine">At least 8 characters.</p>
+    <label class="switch auth-check"><input type="checkbox" id="su-news"><span>Send me the occasional email newsletter</span></label>
+    <button class="primary" type="submit">Create free account</button>
+    <p class="fine">By continuing you agree to the <a href="/privacy.html">privacy policy</a>. No credit card, ever.</p>
+    <p class="auth-msg" role="status" aria-live="polite"></p>
+  </form>
+
+  <form id="login-form" class="auth-form" hidden>
+    <label for="li-email">Email</label>
+    <input id="li-email" type="email" autocomplete="email" required maxlength="200">
+    <label for="li-pass">Password</label>
+    <input id="li-pass" type="password" autocomplete="current-password" required maxlength="200">
+    <button class="primary" type="submit">Log in</button>
+    <p class="auth-msg" role="status" aria-live="polite"></p>
+  </form>
 </section>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

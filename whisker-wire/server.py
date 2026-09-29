@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
-"""Whisker Wire: local server. Run `python server.py` and open http://127.0.0.1:8787
+"""Whisker Wire server. Run `python server.py` and open http://127.0.0.1:8787
 
-Standard library only. Binds to localhost, keeps no accounts and no logs of what you read.
+Two modes, chosen entirely by whether SUPABASE_URL etc. are set (see auth.py):
+
+- Local/offline (default): no accounts, no gate, one shared "Tick remembers" file on this computer.
+  Exactly how this app has always worked. Binds to localhost only.
+- Hosted (cloud mode): set SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_KEY/SUPABASE_JWT_SECRET and
+  ALLOWED_HOSTS. The wire, Value Radar and filings stay open to anyone, so a visitor can scroll around
+  before deciding anything; a free account is only asked for at the two personal features, Ask Tick and
+  Tick remembers, each kept separately per person. See DEPLOY.md for the one-time setup.
+
+Standard library only either way.
 """
 import argparse
 import json
 import mimetypes
+import os
 import re
 import sys
 import urllib.error
@@ -13,7 +23,10 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import auth
+import cloud_memory
 import engine
+import mailing
 import memory
 import tick_chat
 from markets import market_list, valid_market
@@ -22,6 +35,11 @@ from signals import SIGNALS
 WEB = (Path(__file__).parent / "web").resolve()
 CSP = ("default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
        "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+# The only two things a visitor needs an account for: asking Tick anything, and Tick remembers (which
+# is inherently per-person). Everything else - the wire, Value Radar, filings, reading an article - is
+# open to anyone, logged in or not, so there is something real to look at before ever being asked to sign up.
+PROTECTED_WHEN_CLOUD = {"/api/chat", "/api/memory"}
 
 
 def _signals():
@@ -38,7 +56,7 @@ def _health(market="us"):
     return {"sources": f["health"], "sec_configured": bool(engine.sec_agent())}
 
 
-def _post_sec(body):
+def _post_sec(body, user):
     try:
         contact = engine.save_sec_contact(f"{body.get('name', '')} {body.get('email', '')}")
     except ValueError:
@@ -46,31 +64,51 @@ def _post_sec(body):
     return {"ok": True, "configured": True, "contact": contact}
 
 
-def _post_chat(body):
-    hist = body.get("history")
+def _memory_for_chat(user):
     try:
-        mem = memory.for_chat()
+        return cloud_memory.for_chat(user["id"]) if user else memory.for_chat()
     except Exception:
-        mem = None   # a broken memory file must never stop Tick from answering
-    return tick_chat.answer(body.get("q", ""), body.get("market", "us"), hist if isinstance(hist, list) else None, mem)
+        return None   # a broken memory backend must never stop Tick from answering
 
 
-# path -> (largest body accepted in bytes, handler)
-POST_ROUTES = {"/api/sec-contact": (2048, _post_sec), "/api/chat": (8192, _post_chat), "/api/memory": (8192, memory.handle)}
+def _post_chat(body, user):
+    hist = body.get("history")
+    return tick_chat.answer(body.get("q", ""), body.get("market", "us"), hist if isinstance(hist, list) else None,
+                            _memory_for_chat(user), rate_key=(user or {}).get("id"))
+
+
+def _post_memory(body, user):
+    return cloud_memory.handle(user["id"], body) if user else memory.handle(body)
+
+
+def _noop(body, user):
+    return None   # /api/auth/* are handled specially in do_POST, since they must set cookies
+
+
+# path -> (largest body accepted in bytes, handler(body, user))
+POST_ROUTES = {
+    "/api/sec-contact": (2048, _post_sec),
+    "/api/chat": (8192, _post_chat),
+    "/api/memory": (8192, _post_memory),
+    "/api/auth/signup": (512, _noop),
+    "/api/auth/login": (512, _noop),
+    "/api/auth/logout": (256, _noop),
+}
 
 ROUTES = {
-    "/api/feed": lambda q: engine.get_feed(_mk(q)),
-    "/api/quotes": lambda q: engine.get_quotes(_mk(q)),
-    "/api/undervalued": lambda q: engine.get_undervalued(_mk(q)),
-    "/api/markets": lambda q: {"markets": market_list()},
-    "/api/filings": lambda q: engine.get_filings(),
-    "/api/signals": lambda q: _signals(),
-    "/api/chat-status": lambda q: tick_chat.status(),
-    "/api/memory": lambda q: memory.get_all(),
-    "/api/track": lambda q: engine.get_track(),
-    "/api/health": lambda q: _health(_mk(q)),
-    "/api/ticker": lambda q: engine.get_ticker(q.get("symbol", [""])[0]),
-    "/api/article": lambda q: engine.get_article(q.get("url", [""])[0]),
+    "/api/feed": lambda q, u: engine.get_feed(_mk(q)),
+    "/api/quotes": lambda q, u: engine.get_quotes(_mk(q)),
+    "/api/undervalued": lambda q, u: engine.get_undervalued(_mk(q)),
+    "/api/markets": lambda q, u: {"markets": market_list()},
+    "/api/filings": lambda q, u: engine.get_filings(),
+    "/api/signals": lambda q, u: _signals(),
+    "/api/chat-status": lambda q, u: tick_chat.status(),
+    "/api/memory": lambda q, u: cloud_memory.get_all(u["id"]) if u else memory.get_all(),
+    "/api/track": lambda q, u: engine.get_track(),
+    "/api/health": lambda q, u: _health(_mk(q)),
+    "/api/ticker": lambda q, u: engine.get_ticker(q.get("symbol", [""])[0]),
+    "/api/article": lambda q, u: engine.get_article(q.get("url", [""])[0]),
+    "/api/auth/me": lambda q, u: {"email": u["email"] if u else None, "cloud": auth.cloud_enabled()},
 }
 
 
@@ -85,6 +123,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        for c in getattr(self, "_set_cookies", None) or []:
+            self.send_header("Set-Cookie", c)
         self.end_headers()
         self.wfile.write(body)
 
@@ -92,19 +132,31 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj).encode(), "application/json; charset=utf-8")
 
     def _host_ok(self):
-        # DNS-rebinding guard: only answer requests addressed to this machine by name or loopback IP.
+        # DNS-rebinding guard: only answer requests addressed to a name this deployment actually owns.
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
-        return host in ("127.0.0.1", "localhost", "::1")
+        allowed = {"127.0.0.1", "localhost", "::1"}
+        allowed |= {h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()}
+        return host in allowed
+
+    def _user(self):
+        """Resolves who (if anyone) is logged in, and queues a refreshed session cookie if needed.
+        Cheap and side-effect-free when there is nothing to refresh: no network call in the common case."""
+        self._set_cookies = []
+        user, new_cookies = auth.current_user(self.headers.get("Cookie"))
+        if new_cookies:
+            self._set_cookies = new_cookies
+        return user
 
     def do_POST(self):
-        # The only writes and paid lookups: saving the SEC contact and asking Tick. Guarded against cross-site
-        # requests: same-origin only, JSON only (a cross-origin page cannot send that without a preflight we never grant).
+        # Guarded against cross-site requests: same-origin only, JSON only (a cross-origin page cannot
+        # send that without a preflight we never grant).
         if not self._host_ok():
             return self._json(403, {"error": "forbidden host"})
         origin = self.headers.get("Origin")
         if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
             return self._json(403, {"error": "cross-site request refused"})
-        route = POST_ROUTES.get(urllib.parse.urlparse(self.path).path)
+        path = urllib.parse.urlparse(self.path).path
+        route = POST_ROUTES.get(path)
         if not route:
             return self._json(404, {"error": "unknown endpoint"})
         limit, fn = route
@@ -119,23 +171,70 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("bad body")
         except (ValueError, TypeError):
             return self._json(400, {"error": "Send a small JSON object."})
+
+        user = self._user()
+        cloud = auth.cloud_enabled()
+        if path == "/api/sec-contact" and cloud:
+            return self._json(404, {"error": "unknown endpoint"})   # the operator sets this via SEC_USER_AGENT instead
+        if path in ("/api/auth/signup", "/api/auth/login", "/api/auth/logout"):
+            return self._auth_action(path, body)
+        if cloud and path in PROTECTED_WHEN_CLOUD and not user:
+            return self._json(401, {"error": "Please log in first."})
         try:
-            return self._json(200, fn(body))
+            return self._json(200, fn(body, user))
         except ValueError as e:
             return self._json(400, {"error": str(e)})
         except Exception:
             return self._json(502, {"error": "Tick could not reach her sources just now. Try again in a moment."})
 
+    def _auth_action(self, path, body):
+        try:
+            if path == "/api/auth/signup":
+                email, password = str(body.get("email", "")).strip().lower(), body.get("password", "")
+                try:
+                    session = auth.sign_up(email, password)
+                except auth.AuthError as e:
+                    if e.pending:
+                        return self._json(200, {"ok": True, "pending": True, "message": str(e)})
+                    raise
+                if body.get("newsletter"):
+                    mailing.subscribe(email)
+                self._set_cookies = auth.session_cookies(session)
+                return self._json(200, {"ok": True, "email": session["user"].get("email", email)})
+            if path == "/api/auth/login":
+                email, password = str(body.get("email", "")).strip().lower(), body.get("password", "")
+                session = auth.sign_in(email, password)
+                self._set_cookies = auth.session_cookies(session)
+                return self._json(200, {"ok": True, "email": session["user"].get("email", email)})
+            if path == "/api/auth/logout":
+                at = auth.read_cookies(self.headers.get("Cookie")).get(auth.ACCESS_COOKIE)
+                if at:
+                    auth.sign_out(at)
+                self._set_cookies = auth.session_cookies(None, clear=True)
+                return self._json(200, {"ok": True})
+        except auth.AuthError as e:
+            return self._json(400, {"error": str(e)})
+        except ConnectionError as e:
+            return self._json(502, {"error": str(e)})
+        except Exception:
+            return self._json(502, {"error": "Could not reach the account service. Try again in a moment."})
+
     def do_GET(self):
         if not self._host_ok():
             return self._json(403, {"error": "forbidden host"})
         u = urllib.parse.urlparse(self.path)
+        user = self._user()
+        cloud = auth.cloud_enabled()
         if u.path.startswith("/api/"):
+            if u.path == "/api/sec-contact" and cloud:
+                return self._json(404, {"error": "unknown endpoint"})
             fn = ROUTES.get(u.path)
             if not fn:
                 return self._json(404, {"error": "unknown endpoint"})
+            if cloud and u.path in PROTECTED_WHEN_CLOUD and not user:
+                return self._json(401, {"error": "Please log in first."})
             try:
-                return self._json(200, fn(urllib.parse.parse_qs(u.query)))
+                return self._json(200, fn(urllib.parse.parse_qs(u.query), user))
             except ValueError as e:
                 return self._json(400, {"error": str(e)})
             except urllib.error.HTTPError as e:
@@ -158,10 +257,16 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--host", default=None)
     args = ap.parse_args()
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"Whisker Wire running at http://127.0.0.1:{args.port}  (Ctrl+C to stop)", flush=True)
-    if not engine.sec_agent():
+    port = int(os.environ.get("PORT") or args.port)
+    host = args.host or os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("ALLOWED_HOSTS") else "127.0.0.1")
+    srv = ThreadingHTTPServer((host, port), Handler)
+    cloud = auth.cloud_enabled()
+    print(f"Whisker Wire running at http://{host}:{port}  ({'accounts on' if cloud else 'local mode, no accounts'})", flush=True)
+    if cloud and not mailing.enabled():
+        print("Mailing list is off: set BUTTONDOWN_API_KEY to collect newsletter sign-ups.", flush=True)
+    if not cloud and not engine.sec_agent():
         print("SEC filings are off: add your contact to whisker-wire/sec_contact.txt (see README).", flush=True)
     try:
         srv.serve_forever()

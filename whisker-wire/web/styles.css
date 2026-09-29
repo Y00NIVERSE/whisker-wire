@@ -621,6 +621,31 @@ body.reader-open .fab, body.reader-open .tickpop { display: none; }   /* the rea
 }
 @media (prefers-reduced-motion: reduce) { .tickpop, .fab.pop { animation: none; } }
 
+.account { display: inline-flex; align-items: center; gap: 8px; }
+.account-email { font: 500 12.5px var(--f-mono); color: var(--ink-2); max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- account modal: signup/login, opened in-page whenever a feature needs it (accounts mode only) ---------- */
+#auth-scrim { z-index: 70; }
+.auth-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 71; width: min(400px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; border: 1px solid var(--ink); background: var(--surface); box-shadow: 5px 5px 0 color-mix(in srgb, var(--ink) 45%, transparent); padding: 24px; }
+.auth-close { position: absolute; top: 12px; right: 12px; padding: 4px 10px; font-size: 12px; }
+.auth-reason { font: 600 14px/1.4 var(--f-display); margin: 0 30px 16px 0; }
+.auth-modal .seg { display: flex; width: 100%; margin-bottom: 18px; }
+.auth-modal .seg [role=tab] { flex: 1; padding: 10px 6px; font: 700 13.5px var(--f-display); }
+.auth-modal .seg [role=tab][aria-selected="true"] { background: var(--ink); color: var(--paper); }
+.auth-form { display: grid; gap: 6px; }
+.auth-form[hidden] { display: none; }
+.auth-form label { font: 700 11px var(--f-display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); margin-top: 8px; }
+.auth-form label:first-child { margin-top: 0; }
+.auth-form input[type=email], .auth-form input[type=password] { padding: 10px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); font: 500 15px var(--f-display); }
+.auth-form input:focus-visible { border-color: var(--ink); }
+.auth-form .primary { margin-top: 14px; width: 100%; text-align: center; }
+.auth-check { margin: 10px 0 2px; }
+.auth-msg { min-height: 1.4em; font: 600 13px var(--f-display); color: var(--fine); }
+
+/* a nudge shown in place of a personal feature (Tick remembers, Ask Tick) when signed out in accounts mode */
+.signin-prompt { display: grid; gap: 10px; padding: 16px; border: 1px dashed var(--rule); border-radius: 8px; text-align: center; }
+.signin-prompt p { font: 500 14px/1.4 var(--f-display); color: var(--ink-2); margin: 0; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1080px) {
   .grid { grid-template-columns: 1fr; gap: 40px; }
