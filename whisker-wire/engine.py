@@ -25,7 +25,12 @@ from markets import MARKETS, valid_market
 from signals import SIGNALS, MAINSTREAM, TICKER_STOP
 
 ROOT = Path(__file__).parent
-UA_BROWSER = "Mozilla/5.0 (compatible; WhiskerWire/0.1; personal research tool)"
+# A self-identifying bot UA (what this used to say) is exactly what WAFs like Cloudflare fingerprint
+# and block on sight, even for a single one-off fetch - and every fetch here is triggered by one
+# person reading one article, the same thing a browser extension's "reader mode" does. Looking like
+# an ordinary browser tab is what makes that legitimate, one-at-a-time reading actually work.
+UA_BROWSER = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0 Safari/537.36")
 MAX_AGE_H = 36
 
 LEVEL_RANK = {"urgent": 0, "watch": 1, "normal": 2}
@@ -154,7 +159,9 @@ _OPENER = urllib.request.build_opener(_Redirect, _PinnedHTTPHandler(), _PinnedHT
 
 def http_get(url, headers=None, timeout=8, max_bytes=3_000_000):
     assert_public(url)
-    req = urllib.request.Request(url, headers={"User-Agent": UA_BROWSER, "Accept": "*/*", **(headers or {})})
+    base = {"User-Agent": UA_BROWSER, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"}
+    req = urllib.request.Request(url, headers={**base, **(headers or {})})
     with _OPENER.open(req, timeout=timeout) as r:
         return r.read(max_bytes), r.headers.get_content_charset() or "utf-8"
 
@@ -618,8 +625,6 @@ def _screener(sid):
     return json.loads(data)["finance"]["result"][0].get("quotes", [])
 
 
-UA_CHROME = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-             "Chrome/124.0 Safari/537.36")
 _yh_lock = threading.Lock()
 _yh = {"opener": None, "crumb": None, "ts": 0.0}
 
@@ -629,7 +634,7 @@ def _yahoo_session(force=False):
     with _yh_lock:
         if force or not _yh["crumb"] or time.time() - _yh["ts"] > 3000:
             op = urllib.request.build_opener(_Redirect, urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-            op.addheaders = [("User-Agent", UA_CHROME)]
+            op.addheaders = [("User-Agent", UA_BROWSER)]
             try:
                 op.open("https://fc.yahoo.com", timeout=10)  # answers 404 but sets the cookie
             except Exception:
@@ -653,7 +658,7 @@ def _screen_market(spec, size=250):
         url = (f"{YF}/v1/finance/screener?crumb={urllib.parse.quote(crumb)}&lang=en-US&region=US"
                "&formatted=false&corsDomain=finance.yahoo.com")
         req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                     headers={"Content-Type": "application/json", "User-Agent": UA_CHROME})
+                                     headers={"Content-Type": "application/json", "User-Agent": UA_BROWSER})
         try:
             quotes = json.loads(op.open(req, timeout=20).read())["finance"]["result"][0].get("quotes", [])
             break
@@ -900,7 +905,20 @@ def resolve_google_news(url):
 
 def get_article(url):
     url = resolve_google_news(url)
-    data, cs = http_get(url, max_bytes=2_500_000, timeout=15)
+    try:
+        data, cs = http_get(url, max_bytes=2_500_000, timeout=15)
+    except urllib.error.HTTPError as e:
+        if e.code != 429:
+            raise
+        # A single read, triggered by one person clicking one article - worth one polite retry
+        # rather than immediately giving up, in case the 429 was a brief, real rate limit.
+        wait = 1.5
+        try:
+            wait = min(float(e.headers.get("Retry-After", wait)), 4.0)
+        except (TypeError, ValueError):
+            pass
+        time.sleep(wait)
+        data, cs = http_get(url, max_bytes=2_500_000, timeout=15)
     p = _Extract()
     p.feed(data.decode(cs, "replace"))
     paras = (p.p_art if len(p.p_art) >= 3 else p.p_all)[:200]
