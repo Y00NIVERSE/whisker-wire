@@ -260,7 +260,10 @@ def main():
     ap.add_argument("--host", default=None)
     args = ap.parse_args()
     port = int(os.environ.get("PORT") or args.port)
-    host = args.host or os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("ALLOWED_HOSTS") else "127.0.0.1")
+    # A host assigns PORT itself (Render, Fly, Heroku, ...); that, not ALLOWED_HOSTS, is the real signal
+    # that this isn't a laptop anymore. Binding stayed local-only otherwise, even with ALLOWED_HOSTS set
+    # for some other reason, so a forgotten PORT never accidentally opens the machine to the network.
+    host = args.host or os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
     srv = ThreadingHTTPServer((host, port), Handler)
     cloud = auth.cloud_enabled()
     print(f"Whisker Wire running at http://{host}:{port}  ({'accounts on' if cloud else 'local mode, no accounts'})", flush=True)
