@@ -56,7 +56,7 @@ def _health(market="us"):
     return {"sources": f["health"], "sec_configured": bool(engine.sec_agent())}
 
 
-def _post_sec(body, user):
+def _post_sec(body, user, ip):
     try:
         contact = engine.save_sec_contact(f"{body.get('name', '')} {body.get('email', '')}")
     except ValueError:
@@ -71,21 +71,30 @@ def _memory_for_chat(user):
         return None   # a broken memory backend must never stop Tick from answering
 
 
-def _post_chat(body, user):
+def _post_chat(body, user, ip):
     hist = body.get("history")
+    # Logged-in users get their own bucket; anonymous ones are limited per-IP, not lumped into one
+    # shared bucket that a single visitor could exhaust for everybody else.
     return tick_chat.answer(body.get("q", ""), body.get("market", "us"), hist if isinstance(hist, list) else None,
-                            _memory_for_chat(user), rate_key=(user or {}).get("id"))
+                            _memory_for_chat(user), rate_key=(user or {}).get("id") or "ip:" + ip)
 
 
-def _post_memory(body, user):
+def _post_memory(body, user, ip):
     return cloud_memory.handle(user["id"], body) if user else memory.handle(body)
 
 
-def _noop(body, user):
+def _noop(body, user, ip):
     return None   # /api/auth/* are handled specially in do_POST, since they must set cookies
 
 
-# path -> (largest body accepted in bytes, handler(body, user))
+def _get_article(q, user, ip):
+    # The only GET route that makes the server fetch an arbitrary third-party URL, so - unlike the
+    # other read-only routes, which just read local/cached data - it needs its own throttle.
+    tick_chat.rate_limit("article:" + ip, limit=20, window=600)
+    return engine.get_article(q.get("url", [""])[0])
+
+
+# path -> (largest body accepted in bytes, handler(body, user, ip))
 POST_ROUTES = {
     "/api/sec-contact": (2048, _post_sec),
     "/api/chat": (8192, _post_chat),
@@ -96,19 +105,19 @@ POST_ROUTES = {
 }
 
 ROUTES = {
-    "/api/feed": lambda q, u: engine.get_feed(_mk(q)),
-    "/api/quotes": lambda q, u: engine.get_quotes(_mk(q)),
-    "/api/undervalued": lambda q, u: engine.get_undervalued(_mk(q)),
-    "/api/markets": lambda q, u: {"markets": market_list()},
-    "/api/filings": lambda q, u: engine.get_filings(),
-    "/api/signals": lambda q, u: _signals(),
-    "/api/chat-status": lambda q, u: tick_chat.status(),
-    "/api/memory": lambda q, u: cloud_memory.get_all(u["id"]) if u else memory.get_all(),
-    "/api/track": lambda q, u: engine.get_track(),
-    "/api/health": lambda q, u: _health(_mk(q)),
-    "/api/ticker": lambda q, u: engine.get_ticker(q.get("symbol", [""])[0]),
-    "/api/article": lambda q, u: engine.get_article(q.get("url", [""])[0]),
-    "/api/auth/me": lambda q, u: {"email": u["email"] if u else None, "cloud": auth.cloud_enabled()},
+    "/api/feed": lambda q, u, ip: engine.get_feed(_mk(q)),
+    "/api/quotes": lambda q, u, ip: engine.get_quotes(_mk(q)),
+    "/api/undervalued": lambda q, u, ip: engine.get_undervalued(_mk(q)),
+    "/api/markets": lambda q, u, ip: {"markets": market_list()},
+    "/api/filings": lambda q, u, ip: engine.get_filings(),
+    "/api/signals": lambda q, u, ip: _signals(),
+    "/api/chat-status": lambda q, u, ip: tick_chat.status(),
+    "/api/memory": lambda q, u, ip: cloud_memory.get_all(u["id"]) if u else memory.get_all(),
+    "/api/track": lambda q, u, ip: engine.get_track(),
+    "/api/health": lambda q, u, ip: _health(_mk(q)),
+    "/api/ticker": lambda q, u, ip: engine.get_ticker(q.get("symbol", [""])[0]),
+    "/api/article": _get_article,
+    "/api/auth/me": lambda q, u, ip: {"email": u["email"] if u else None, "cloud": auth.cloud_enabled()},
 }
 
 
@@ -147,6 +156,13 @@ class Handler(BaseHTTPRequestHandler):
             self._set_cookies = new_cookies
         return user
 
+    def _client_ip(self):
+        # Behind a host (Render etc.), self.client_address is the platform's own proxy, not the
+        # visitor; that proxy sets X-Forwarded-For for every request it forwards, since the app is
+        # never reachable directly. Locally there is no proxy, so it falls back to the raw socket peer.
+        fwd = self.headers.get("X-Forwarded-For")
+        return fwd.split(",")[0].strip() if fwd else self.client_address[0]
+
     def do_POST(self):
         # Guarded against cross-site requests: same-origin only, JSON only (a cross-origin page cannot
         # send that without a preflight we never grant).
@@ -181,7 +197,7 @@ class Handler(BaseHTTPRequestHandler):
         if cloud and path in PROTECTED_WHEN_CLOUD and not user:
             return self._json(401, {"error": "Please log in first."})
         try:
-            return self._json(200, fn(body, user))
+            return self._json(200, fn(body, user, self._client_ip()))
         except ValueError as e:
             return self._json(400, {"error": str(e)})
         except Exception:
@@ -234,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
             if cloud and u.path in PROTECTED_WHEN_CLOUD and not user:
                 return self._json(401, {"error": "Please log in first."})
             try:
-                return self._json(200, fn(urllib.parse.parse_qs(u.query), user))
+                return self._json(200, fn(urllib.parse.parse_qs(u.query), user, self._client_ip()))
             except ValueError as e:
                 return self._json(400, {"error": str(e)})
             except urllib.error.HTTPError as e:
