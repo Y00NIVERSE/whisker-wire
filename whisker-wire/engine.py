@@ -1,6 +1,7 @@
 """Whisker Wire engine: fetch, cluster, score. Standard library only."""
 import concurrent.futures as cf
 import hashlib
+import http.client
 import http.cookiejar
 import html
 import ipaddress
@@ -78,6 +79,27 @@ SOURCES = [
 
 
 # ---------------------------------------------------------------- safe fetching
+_PUBLIC_HOSTS = {}  # hostname -> (validated ip, expires_at); the IP itself is cached, not just a yes/no,
+                     # so a later connection can never be handed a different (rebound) address without
+                     # being re-checked - see _public_ip.
+
+
+def _public_ip(host, port):
+    """Resolve host, confirm every address it points to is public, and return one to connect to.
+    Cached briefly per host (DNS lookups are slow on Windows under load)."""
+    hit = _PUBLIC_HOSTS.get(host)
+    if hit and hit[1] > time.time():
+        return hit[0]
+    ip = None
+    for info in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP):
+        addr = info[4][0]
+        if not ipaddress.ip_address(addr).is_global:
+            raise ValueError("private or local addresses are blocked")
+        ip = ip or addr
+    _PUBLIC_HOSTS[host] = (ip, time.time() + 300)
+    return ip
+
+
 def assert_public(url):
     """Refuse anything that is not plain http(s) to a public address (SSRF guard)."""
     u = urllib.parse.urlparse(url)
@@ -85,15 +107,7 @@ def assert_public(url):
         raise ValueError("only http(s) URLs are allowed")
     if u.port not in (None, 80, 443):
         raise ValueError("non-standard ports are blocked")
-    if _PUBLIC_HOSTS.get(u.hostname, 0) > time.time():
-        return  # resolved to public addresses recently; DNS lookups are slow on Windows under load
-    for info in socket.getaddrinfo(u.hostname, u.port or 443, proto=socket.IPPROTO_TCP):
-        if not ipaddress.ip_address(info[4][0]).is_global:
-            raise ValueError("private or local addresses are blocked")
-    _PUBLIC_HOSTS[u.hostname] = time.time() + 300
-
-
-_PUBLIC_HOSTS = {}
+    _public_ip(u.hostname, u.port or (443 if u.scheme == "https" else 80))
 
 
 class _Redirect(urllib.request.HTTPRedirectHandler):
@@ -102,7 +116,40 @@ class _Redirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_OPENER = urllib.request.build_opener(_Redirect)
+class _PinnedConnectionMixin:
+    """Makes the connection use the exact IP _public_ip already validated, instead of letting the
+    socket layer re-resolve the hostname independently a moment later - the gap a DNS-rebinding
+    attack lives in. http.client stores the socket factory as a plain instance attribute for
+    exactly this kind of substitution (see its __init__), so this is the intended hook, not a hack."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._create_connection = self._pinned_connect
+
+    def _pinned_connect(self, address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+        host, port = address
+        ip = _public_ip(host, port)
+        return socket.create_connection((ip, port), timeout, source_address)
+
+
+class _PinnedHTTPConnection(_PinnedConnectionMixin, http.client.HTTPConnection):
+    pass
+
+
+class _PinnedHTTPSConnection(_PinnedConnectionMixin, http.client.HTTPSConnection):
+    pass
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
+
+
+_OPENER = urllib.request.build_opener(_Redirect, _PinnedHTTPHandler(), _PinnedHTTPSHandler())
 
 
 def http_get(url, headers=None, timeout=8, max_bytes=3_000_000):
