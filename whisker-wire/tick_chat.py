@@ -20,6 +20,7 @@ import urllib.request
 from collections import defaultdict, deque
 from pathlib import Path
 
+import company
 import engine
 import memory
 from markets import MARKETS, valid_market
@@ -63,7 +64,8 @@ _STRONG = re.compile(
     r"ftse|sensex|nifty|stoxx|dax|brokers?|brokerage|tickers?|market ?cap|price target|analysts?|guidance|insider "
     r"(?:buying|selling|trading)|sec filings?|13f|form 4|13d|pump and dump|dollar[- ]cost|diversif\w+|hedge fund|"
     r"401\(?k\)?|roth|ira|retirement|capital gains|stop[- ]loss|day trad\w+|swing trad\w+|margin (?:call|account)|"
-    r"volatility|vix|fomc|ecb|boj|gdp|cpi|book value|free cash flow|ebitda|blue[- ]chip|penny stocks?)\b", re.I)
+    r"volatility|vix|fomc|ecb|boj|gdp|cpi|book value|free cash flow|ebitda|blue[- ]chip|penny stocks?|"
+    r"annual reports?|10-?k|20-?f|8-?k|balance sheet|income statement|financial statements?|risk factors)\b", re.I)
 _WEAK = re.compile(
     r"\b(market|markets|shares?|buy|sell|price|prices|fund|funds|index|rates?|risk|gold|oil|tax|taxes|savings|save|"
     r"budget|loan|mortgage|debt|profit|revenue|growth|company|companies|bank|money|cash|wealth|financial|finance|"
@@ -356,7 +358,10 @@ _INTENTS = {
     "risk": re.compile(r"\b(risk|risks|risky|wrong|downside|danger|safe|safer|lose|crash|bubble)\b", re.I),
     "value": re.compile(r"\b(undervalued|overvalued|cheap|expensive|valuation|fair value|p/?e)\b", re.I),
     "howto": re.compile(r"\b(how (do|can|should) i|how to|beginner|start(ing)? (investing|trading)|first (stock|investment)|where (do|should) i|best way)\b", re.I),
+    "report": re.compile(r"\b(annual reports?|10-?k|20-?f|financial statements?|financials|balance sheet|income statement|cash flow|"
+                         r"filings?|8-?k|latest developments?|developments|what changed|risk factors|revenue growth|profit margins?|debt)\b", re.I),
 }
+_ANNUAL_Q = re.compile(r"\b(annual reports?|10-?k|20-?f|risk factors|what changed|red flags?)\b", re.I)
 
 
 def glossary_terms(q, limit=2):
@@ -457,6 +462,49 @@ def offtopic_reply(q):
 
 
 # ---------------------------------------------------------------- retrieval
+def _quietly(fn, *a):
+    """A filing that cannot be read must never stop Tick answering the rest of the question."""
+    try:
+        return fn(*a)
+    except Exception:
+        return None
+
+
+def company_blocks(name, co, annual, asked_annual):
+    """What the company's own SEC filings say, as answer blocks. Everything here is a rule applied to the filing
+    text or numbers (see company.py), not an opinion."""
+    if co is None:
+        return [{"type": "p", "text": "I could not reach the SEC just now, so I could not read the filings. Try again in a minute."}], []
+    if not co.get("configured"):
+        return [{"type": "p", "text": "Reading SEC filings is switched off on this site (the owner has not set up the SEC identity it requires)."}], []
+    if not co.get("supported"):
+        return [{"type": "p", "text": f"I can only read filings automatically for US-listed companies. For {name}, the annual report and announcements are on its exchange's site (the Filings tab lists the right one)."}], []
+    blocks, links = [], [{"title": f"{co['name']}: all filings on SEC EDGAR", "url": co["edgar"], "engine": "SEC EDGAR"}]
+    fin = co.get("financials")
+    if fin and fin.get("read"):
+        blocks.append({"type": "ul", "title": f"What {co['name']}'s latest annual numbers say", "items": [r["text"] for r in fin["read"]][:5]})
+    dev = co.get("developments") or []
+    if dev:
+        mark = {"bad": " (serious)", "warn": " (worth a look)", "info": ""}
+        blocks.append({"type": "ul", "title": "Latest developments (from the company's SEC filings)",
+                       "items": [f"{d['date']}: " + "; ".join(i["label"] for i in d["items"][:2]) + mark[d["tone"]] for d in dev[:5]]})
+    if co.get("annual"):
+        links.append({"title": f"{co['name']} {co['annual']['form']} for the year ending {co['annual']['period']}", "url": co["annual"]["url"], "engine": "SEC EDGAR"})
+    if annual and annual.get("available"):
+        flags = [f for f in annual["flags"] if not f["hedged"]][:4]
+        if flags:
+            blocks.append({"type": "ul", "title": "Red flags the annual report states", "items": [f"{f['label']}: “{f['text']}”" for f in flags]})
+        elif annual["flags"]:
+            blocks.append({"type": "p", "text": "The annual report only mentions problems such as going concern or covenant breaches as things that could happen, which is normal boilerplate. No stated red flags."})
+        if annual.get("new_risks"):
+            blocks.append({"type": "ul", "title": "Risk wording that is new since last year's report", "items": annual["new_risks"][:3]})
+        if annual.get("drivers"):
+            blocks.append({"type": "ul", "title": "What management says moved the numbers", "items": annual["drivers"][:3]})
+    elif asked_annual:
+        blocks.append({"type": "p", "text": "Reading a whole annual report takes a little while the first time. Ask again in a minute and it will be ready, or open the Company page."})
+    return blocks, links
+
+
 def retrieve(q, market, entities, want):
     """Gather everything in parallel: quotes, headlines from three engines, an encyclopedia definition, our wire."""
     syms = [e["symbol"] for e in entities]
@@ -479,6 +527,11 @@ def retrieve(q, market, entities, want):
             term = re.sub(r"^\s*(what('?s| is| are| does)|explain|define|meaning of|how does|how do)\s+(a |an |the )?", "", q, flags=re.I).rstrip("?. ")
         if term:
             jobs["wiki"] = lambda: wiki_summary(term)
+    if entities and "report" in want and not re.search(r"\.[A-Z]{2,}$", entities[0]["symbol"]):
+        sym = entities[0]["symbol"]
+        jobs["company"] = lambda: _quietly(company.get_company, sym)
+        if _ANNUAL_Q.search(q):   # slow the first time (a whole filing); it keeps going after the deadline, so asking again is instant
+            jobs["annual"] = lambda: _quietly(company.get_annual_report, sym)
     names = list(jobs)
     res = engine.run_parallel(lambda n: (n, jobs[n]()), names, deadline=9, workers=4)
     ctx = {n: v for r in res if r for n, v in [r]}
@@ -551,6 +604,10 @@ def compose_entity(q, market, ents, ctx, want, mem=None):
             blocks.append({"type": "ul", "title": "How it could go wrong", "items": a["warn"][:3]})
     else:
         blocks.append({"type": "p", "text": "Yahoo did not give me live numbers for it just now, so check the price before you rely on anything below."})
+    extra_sources = []
+    if "report" in want and ("company" in ctx or re.search(r"\.[A-Z]{2,}$", e["symbol"]) is None):
+        more, extra_sources = company_blocks(e["name"], ctx.get("company"), ctx.get("annual"), bool(_ANNUAL_Q.search(q)))
+        blocks += more
     hits = wire_hits(market, ents)
     news = ctx["news"]
     if "risk" in want:
@@ -579,9 +636,12 @@ def compose_entity(q, market, ents, ctx, want, mem=None):
                 lines[-1] += f", value read {a['score']}/100"
         blocks.append({"type": "ul", "title": "Side by side", "items": lines})
     name = e["name"]
-    nxt = [f"What could go wrong with {name}?", f"Is {name} undervalued?", f"What is the latest news on {name}?"]
-    nxt = [f for f, tag in zip(nxt, ("risk", "value", "news")) if tag not in want] or nxt
-    return blocks, nxt + ["What is a P/E ratio?"], _sources(items if (hits or news) else [], [(e["symbol"], name)] if qt else [])
+    nxt = [f"What could go wrong with {name}?", f"Is {name} undervalued?", f"What is the latest news on {name}?", f"What is in {name}'s annual report?"]
+    nxt = [f for f, tag in zip(nxt, ("risk", "value", "news", "report")) if tag not in want] or nxt
+    sources = _sources(items if (hits or news) else [], [(e["symbol"], name)] if qt else [])
+    for s in extra_sources:
+        sources.append({"n": len(sources) + 1, "title": s["title"][:110], "url": s["url"], "engine": s["engine"]})
+    return blocks, nxt + ["What is a P/E ratio?"], sources
 
 
 def compose_concept(q, ctx, want):
@@ -709,7 +769,7 @@ def basic_answer(q, market, ents, ctx, want, mem=None):
         blocks.append({"type": "note", "text": "Education, not financial advice. I summarise public sources and can be wrong: check anything you might act on."})
         return {"mode": "basic", "on_topic": True, "blocks": blocks, "sources": sources, "followups": followups[:3]}
     out = None
-    if ents and (want & {"buy", "risk", "value"} or not (want & {"concept", "howto"})):
+    if ents and (want & {"buy", "risk", "value", "report"} or not (want & {"concept", "howto"})):
         out = compose_entity(q, market, ents, ctx, want, mem)
     elif "overview" in want and not ents:
         out = compose_overview(market)
@@ -771,6 +831,16 @@ def build_context(market, ents, ctx, sources, mem=None):
             a = value_read(qt, e)
             lines.append(f"SNAPSHOT {e['name']} ({e['symbol']}): " + "; ".join(f"{k} {v}" for k, v in stats_for(qt)) +
                          (f"; Whisker Wire value score {a['score']}/100; cheap because: {' | '.join(a['good'][:2]) or 'n/a'}; cautions: {' | '.join(a['warn'][:2])}" if a else ""))
+    co, ann = ctx.get("company"), ctx.get("annual")
+    if co and co.get("supported"):   # public SEC filings only; nothing about the user
+        fin = co.get("financials") or {}
+        lines.append(f"SEC FILINGS {co['name']}: " + " | ".join(r["text"] for r in fin.get("read", [])[:5]))
+        for d in (co.get("developments") or [])[:5]:
+            lines.append(f"FILING {d['date']} {d['form']}: " + "; ".join(i["label"] for i in d["items"]))
+        if ann and ann.get("available"):
+            lines += [f"ANNUAL REPORT RED FLAG ({'mentioned as a possible risk' if f['hedged'] else 'stated'}): {f['label']}: {f['text']}" for f in ann["flags"][:4]]
+            lines += ["ANNUAL REPORT NEW RISK WORDING: " + s for s in (ann.get("new_risks") or [])[:3]]
+            lines += ["ANNUAL REPORT MANAGEMENT SAYS: " + s for s in (ann.get("drivers") or [])[:3]]
     lines.append("SOURCES:")
     for s in sources:
         lines.append(f"[{s['n']}] {s['title']} ({s['engine']})")
@@ -861,7 +931,8 @@ def answer(question, market="us", history=None, mem=None, rate_key=None):
     if "mine" in want:
         return compose_mine(mem, market)   # your own list and live prices: nothing to search for
     # "What is a short squeeze?" is about a term, so do not go looking for a company called that.
-    skip = ("concept" in want and glossary_terms(q)) or (want & {"overview", "concept", "howto"} and not names_something(q))
+    skip = (("concept" in want and glossary_terms(q)) and not ("report" in want and names_something(q))) \
+        or (want & {"overview", "concept", "howto"} and not names_something(q))
     ents = [] if skip else find_entities(q, market, (mem or {}).get("markets") or ())
     if not is_on_topic(q, ents, want):
         return offtopic_reply(q)

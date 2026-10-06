@@ -58,6 +58,7 @@
       <button class="tab is-on" data-view="wire" aria-pressed="true">Wire</button>
       <button class="tab" data-view="radar" aria-pressed="false">Value Radar</button>
       <button class="tab" data-view="filings" aria-pressed="false">Filings</button>
+      <button class="tab" data-view="company" aria-pressed="false">Company</button>
       <button class="tab" data-view="memory" aria-pressed="false">Tick remembers</button>
       <button class="tab" id="tab-how" aria-pressed="false">Sources &amp; scoring</button>
       <button class="tab tab-read" id="open-reader" aria-pressed="false">Read here</button>
@@ -186,6 +187,21 @@
         <p class="lede">Executives and 10% owners must report trades within two business days. Buying with their own money is the signal worth reading; selling is noisy.</p>
       </div>
       <div id="filings-body"></div>
+    </div>
+
+    <div class="view" id="view-company">
+      <div class="intro">
+        <p class="eyebrow">Company brief</p>
+        <h1>Beyond the headline: the numbers, the annual report and the latest filings.</h1>
+        <p class="lede">The news is still the main event. This is for when a story makes you ask whether the company behind it is actually any good: five years of results, red flags and what changed in its annual report, and what it has just told the SEC. US-listed companies, read straight from the SEC.</p>
+      </div>
+      <form class="sec-form" id="co-form" autocomplete="off">
+        <label for="co-in" class="sr">Ticker symbol</label>
+        <input id="co-in" maxlength="12" placeholder="Ticker, e.g. AAPL" spellcheck="false">
+        <button class="primary" type="submit">Look up</button>
+      </form>
+      <div class="chips" id="co-chips" aria-label="Try one"></div>
+      <div id="company-body"></div>
     </div>
 
     <div class="view" id="view-memory">
