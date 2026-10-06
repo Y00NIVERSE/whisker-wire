@@ -846,6 +846,9 @@ def rate_limit(key="global", limit=30, window=600, now=None):
         if len(bucket) >= limit:
             raise ValueError("Whiskers need a rest: that is a lot of questions in a row. Try again in a few minutes.")
         bucket.append(now)
+        if len(_recent) > 5000:   # keep the table from growing forever on a busy public site
+            for k in [k for k, b in _recent.items() if not b or now - b[-1] > window]:
+                del _recent[k]
 
 
 def answer(question, market="us", history=None, mem=None, rate_key=None):

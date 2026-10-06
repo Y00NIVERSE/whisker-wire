@@ -8,6 +8,12 @@ python whisker-wire/server.py        # then open http://127.0.0.1:8787
 
 Python 3.10+, standard library only. No accounts, no analytics, no request logging. Binds to localhost.
 
+**Putting it on a public host (Render, Fly, ...)?** If the host sets `PORT`, the app binds to all interfaces and
+treats itself as a public site: the server-side "Tick remembers" file and the SEC-contact form are switched
+off (a single shared file must never be writable by strangers; the watchlist stays in each visitor's own
+browser), and set `ALLOWED_HOSTS` to your public hostname. Per-person notes need the accounts mode below.
+Fonts are served from the site itself, so no visitor contacts Google or anyone else just to load the page.
+
 **Want to host this for other people, with free accounts and a mailing list?** See [DEPLOY.md](DEPLOY.md).
 That mode is opt-in (nothing changes unless you set it up). The wire, Value Radar and filings stay open
 to any visitor; a free account is only asked for at the two personal features, Ask Tick and Tick
@@ -68,7 +74,7 @@ Urgent is 8 or more points and confirmed; Watch is 5 to 7 (or 8 or more but unco
 ## Development
 
 ```
-python -m unittest discover -s whisker-wire/tests -v     # offline tests (157)
+python -m unittest discover -s whisker-wire/tests -v     # offline tests (178)
 ```
 
 Design rules are in `DESIGN.md` (awesome-design-md format, with taste-skill dials).
