@@ -1,0 +1,357 @@
+"""Company brief: numbers, annual-report reading, latest developments. All offline: the SEC is replaced by fixtures
+shaped like its real responses."""
+import json
+import sys
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import company  # noqa: E402
+import engine  # noqa: E402
+import server  # noqa: E402
+import tick_chat  # noqa: E402
+
+NOW = time.mktime(time.strptime("2026-06-01", "%Y-%m-%d"))
+
+
+def rows(*items):
+    keys = ("accessionNumber", "filingDate", "reportDate", "form", "primaryDocument", "items")
+    return [dict(zip(keys, it)) for it in items]
+
+
+class Developments(unittest.TestCase):
+    R = rows(
+        ("0000000001-26-000010", "2026-05-20", "", "8-K", "a.htm", "2.02,9.01"),
+        ("0000000001-26-000009", "2026-05-02", "", "8-K", "b.htm", "4.02"),
+        ("0000000001-26-000008", "2026-04-02", "", "8-K", "c.htm", "5.02,7.01"),
+        ("0000000001-26-000007", "2026-03-30", "2026-03-31", "10-Q", "q.htm", ""),
+        ("0000000001-26-000006", "2026-03-01", "", "4", "f4.xml", ""),
+        ("0000000001-24-000001", "2024-01-05", "", "8-K", "old.htm", "1.01"),
+    )
+
+    def test_items_are_translated_and_exhibits_dropped(self):
+        d = company.developments(self.R, 123, now=NOW)
+        first = d[0]
+        self.assertEqual([i["code"] for i in first["items"]], ["2.02"])
+        self.assertIn("earnings", first["items"][0]["label"].lower())
+
+    def test_a_restatement_is_flagged_as_the_worst_kind(self):
+        d = {x["date"]: x for x in company.developments(self.R, 123, now=NOW)}
+        self.assertEqual(d["2026-05-02"]["tone"], "bad")
+        self.assertEqual(d["2026-04-02"]["tone"], "warn")   # an executive leaving or arriving
+        self.assertEqual(d["2026-05-20"]["tone"], "info")
+
+    def test_old_filings_and_insider_forms_are_left_out(self):
+        d = company.developments(self.R, 123, now=NOW)
+        self.assertTrue(all(x["date"] >= "2026-03-01" for x in d))
+        self.assertNotIn("4", [x["form"] for x in d])
+
+    def test_a_quarterly_report_is_a_plain_event(self):
+        q = [x for x in company.developments(self.R, 123, now=NOW) if x["form"] == "10-Q"][0]
+        self.assertEqual(q["items"][0]["label"], "Filed its quarterly report")
+
+    def test_links_go_to_the_filing_index_on_sec_gov(self):
+        for x in company.developments(self.R, 123, now=NOW):
+            self.assertTrue(x["url"].startswith("https://www.sec.gov/Archives/edgar/data/123/"))
+
+    def test_identifiers_the_sec_did_not_issue_are_refused(self):
+        with self.assertRaises(ValueError):
+            company._doc_url(1, {"accessionNumber": "../../etc/passwd", "primaryDocument": "x.htm"})
+        with self.assertRaises(ValueError):
+            company._doc_url(1, {"accessionNumber": "0000000001-26-000010", "primaryDocument": "http://evil/x.htm"})
+        with self.assertRaises(ValueError):
+            company._index_url(1, {"accessionNumber": "nope"})
+
+
+def facts_for(years, rev, ni, cfo=None, capex=None, debt=None, equity=None, cash=None, gp=None, quarterly=True):
+    """SEC 'companyfacts' shape: every fact is a list of dated entries, quarters included."""
+    def flow(vals):
+        ents = []
+        for y, v in zip(years, vals):
+            ents.append({"start": f"{y}-01-01", "end": f"{y}-12-31", "val": v, "form": "10-K", "filed": f"{y + 1}-02-10", "fp": "FY"})
+            if quarterly:   # a quarter must never be mistaken for a year
+                ents.append({"start": f"{y}-10-01", "end": f"{y}-12-31", "val": v / 4, "form": "10-K", "filed": f"{y + 1}-02-10", "fp": "FY"})
+        return {"units": {"USD": ents}}
+
+    def stock(vals):
+        return {"units": {"USD": [{"end": f"{y}-12-31", "val": v, "form": "10-K", "filed": f"{y + 1}-02-10"} for y, v in zip(years, vals)]}}
+    g = {"Revenues": flow(rev), "NetIncomeLoss": flow(ni)}
+    if cfo: g["NetCashProvidedByUsedInOperatingActivities"] = flow(cfo)
+    if capex: g["PaymentsToAcquirePropertyPlantAndEquipment"] = flow(capex)
+    if gp: g["GrossProfit"] = flow(gp)
+    if debt: g["LongTermDebt"] = stock(debt)
+    if equity: g["StockholdersEquity"] = stock(equity)
+    if cash: g["CashAndCashEquivalentsAtCarryingValue"] = stock(cash)
+    return {"us-gaap": g}
+
+
+Y = [2021, 2022, 2023, 2024, 2025]
+
+
+class Numbers(unittest.TestCase):
+    def test_years_align_and_quarters_are_ignored(self):
+        f = company.financials(facts_for(Y, [100, 120, 140, 160, 200], [10, 12, 14, 16, 24]))
+        self.assertEqual(f["years"][-1], "2025-12-31")
+        self.assertEqual(f["rows"]["revenue"], [100, 120, 140, 160, 200])
+        self.assertEqual(f["rows"]["net_margin"][-1], 0.12)
+
+    def test_growth_and_margin_are_read_in_plain_english(self):
+        f = company.financials(facts_for(Y, [100, 120, 140, 160, 200], [10, 12, 14, 16, 24]))
+        text = " ".join(r["text"] for r in f["read"])
+        self.assertIn("Revenue grew 25.0% to $200", text)
+        self.assertIn("a year over 4 years", text)
+        self.assertIn("Net margin", text)
+        self.assertEqual(f["read"][0]["tone"], "good")
+
+    def test_a_loss_is_called_a_loss(self):
+        f = company.financials(facts_for(Y, [100, 90, 80, 70, 60], [5, 1, -2, -5, -9]))
+        self.assertTrue(any(r["tone"] == "bad" and "lost money" in r["text"] for r in f["read"]))
+        self.assertTrue(any(r["tone"] == "warn" and r["text"].startswith("Revenue fell") for r in f["read"]))
+
+    def test_profit_that_never_became_cash_is_questioned(self):
+        f = company.financials(facts_for(Y, [100] * 5, [20] * 5, cfo=[8] * 5, capex=[2] * 5))
+        text = " ".join(r["text"] for r in f["read"])
+        self.assertIn("40 cents of each dollar", text)
+        self.assertEqual(f["rows"]["fcf"][-1], 6)
+
+    def test_cash_backed_profit_and_a_cash_pile_are_credited(self):
+        f = company.financials(facts_for(Y, [100] * 5, [20] * 5, cfo=[26] * 5, debt=[10] * 5, equity=[50] * 5, cash=[40] * 5))
+        text = " ".join(r["text"] for r in f["read"])
+        self.assertIn("backed by cash", text)
+        self.assertIn("more cash", text)
+
+    def test_negative_equity_and_heavy_debt_are_warned_about(self):
+        f = company.financials(facts_for(Y, [100] * 5, [10] * 5, debt=[900] * 5, equity=[-50] * 5))
+        self.assertTrue(any("equity is negative" in r["text"] for r in f["read"]))
+        g = company.financials(facts_for(Y, [100] * 5, [10] * 5, debt=[900] * 5, equity=[100] * 5))
+        self.assertTrue(any("heavily borrowed" in r["text"] for r in g["read"]))
+
+    def test_no_revenue_or_profit_data_means_no_table_not_a_crash(self):
+        self.assertIsNone(company.financials({"us-gaap": {"Assets": {"units": {"USD": []}}}}))
+
+    def test_foreign_filers_using_ifrs_names_and_their_own_currency(self):
+        e = [{"start": f"{y}-01-01", "end": f"{y}-12-31", "val": v, "form": "20-F", "filed": f"{y + 1}-03-01"} for y, v in zip(Y, [10, 11, 12, 13, 14])]
+        f = company.financials({"ifrs-full": {"Revenue": {"units": {"EUR": e}}}})
+        self.assertEqual(f["currency"], "EUR")
+        self.assertIn("€14", f["read"][0]["text"])
+
+    def test_money_formatting(self):
+        self.assertEqual(company.money(391_035_000_000), "$391.0B")
+        self.assertEqual(company.money(-2_500_000), "-$2M")
+        self.assertEqual(company.money(950), "$950")
+
+
+BOILER = "The company operates in a competitive industry and faces many uncertainties in the ordinary course of business. " * 40
+
+
+def html_report(risk_extra="", mdna_extra="", intro_extra=""):
+    return f"""<html><head><title>10-K</title></head><body>
+<ix:header><p>HIDDEN XBRL SHOULD NOT APPEAR going concern</p></ix:header>
+<p>TABLE OF CONTENTS</p>
+<p>Item 1A. Risk Factors</p><p>Item 1B. Unresolved Staff Comments</p><p>Item 7. Management's Discussion</p><p>Item 7A. Quantitative</p>
+<p>Item 1.</p><p>Business</p><p>{BOILER}{intro_extra}</p>
+<p>Item 1A.</p><p>Risk Factors</p>
+<p>{BOILER}</p><p>{risk_extra}</p>
+<p>Item 1B. Unresolved Staff Comments</p><p>None.</p>
+<p>Item 7. Management's Discussion and Analysis</p>
+<p>{BOILER}</p><p>{mdna_extra}</p>
+<p>Item 7A. Quantitative and Qualitative Disclosures</p><p>Nothing.</p>
+</body></html>"""
+
+
+class ReadingTheReport(unittest.TestCase):
+    def test_hidden_header_is_skipped_and_split_headings_are_joined(self):
+        lines = company.doc_lines(html_report())
+        self.assertFalse(any("HIDDEN XBRL" in x for x in lines))
+        self.assertIn("Item 1A. Risk Factors", lines)
+
+    def test_the_real_section_beats_the_table_of_contents(self):
+        lines = company.doc_lines(html_report(risk_extra="Our unique zebra risk could harm results."))
+        risk = company.section(lines, "risk")
+        self.assertIn("zebra", risk)
+        self.assertGreater(len(risk), 2000)
+        self.assertNotIn("Unresolved", risk)
+
+    def test_missing_sections_give_nothing_instead_of_junk(self):
+        self.assertEqual(company.section(["Item 1A. Risk Factors", "tiny", "Item 1B. x"], "risk"), "")
+
+    def test_a_stated_problem_is_a_flag_and_a_hypothetical_is_toned_down(self):
+        text = ("Management identified a material weakness in our internal control over financial reporting as of year end. "
+                "If we fail to pay lenders there could be substantial doubt about our ability to continue as a going concern in future.")
+        flags = {f["id"]: f for f in company.scan_flags(text)}
+        self.assertEqual(flags["weak"]["tone"], "bad")
+        self.assertFalse(flags["weak"]["hedged"])
+        self.assertEqual(flags["going"]["tone"], "info")   # only 'could' - the usual boilerplate
+        self.assertTrue(flags["going"]["hedged"])
+        self.assertEqual(company.scan_flags(text)[0]["id"], "weak")   # worst first
+
+    def test_customer_concentration_needs_a_real_percentage(self):
+        s = "One customer accounted for 34% of our total net revenue during the fiscal year ended December 31, 2025."
+        self.assertEqual(company.scan_flags(s)[0]["id"], "conc")
+        self.assertEqual(company.scan_flags("One customer accounted for 4% of our total net revenue during the fiscal year ended 2025."), [])
+
+    def test_a_clean_report_has_no_flags(self):
+        self.assertEqual(company.scan_flags(BOILER), [])
+
+    def test_management_reasons_for_changes_are_picked_out(self):
+        text = ("Net sales increased 12% compared with last year, primarily due to higher demand for services in North America.\n"
+                "The weather was pleasant during the quarter and employees enjoyed the summer picnic event this year.")
+        d = company.drivers(text)
+        self.assertEqual(len(d), 1)
+        self.assertIn("Net sales increased 12%", d[0])
+
+    def test_new_risk_wording_is_found_and_old_wording_is_not(self):
+        old = "Our business could be harmed by supply chain disruption that delays shipments of key components to our customers worldwide. " * 3
+        new = ("Our business could be harmed by supply chain disruption that delays shipments of key components to our customers worldwide. "
+               "Rapid advances in generative artificial intelligence may erode demand for our legacy software products and cause adverse effects on our margins.")
+        found = company.new_risks(new, old)
+        self.assertEqual(len(found), 1)
+        self.assertIn("artificial intelligence", found[0])
+        self.assertIsNone(company.new_risks(new, ""))
+
+    def test_whole_pipeline_from_html(self):
+        cur = {"form": "10-K", "filingDate": "2026-02-01", "reportDate": "2025-12-31", "accessionNumber": "0000000001-26-000001", "primaryDocument": "a10k.htm"}
+        old = dict(cur, filingDate="2025-02-01", reportDate="2024-12-31", accessionNumber="0000000001-25-000001", primaryDocument="b10k.htm")
+        cur_html = html_report(risk_extra="We identified a material weakness in internal control that remains unremediated at year end and affects our reporting. "
+                                           "Generative artificial intelligence may erode demand for our legacy products and cause adverse effects on margins significantly.",
+                               mdna_extra="Revenue increased 18% primarily due to strong growth in cloud subscriptions across all regions during the year.")
+        docs = {"a10k.htm": cur_html, "b10k.htm": html_report()}
+        with mock.patch.object(engine, "_sec_get", side_effect=lambda url, **k: docs[url.rsplit("/", 1)[1]].encode()):
+            out = company.analyze(1, cur, old)
+        self.assertTrue(out["sections"]["risk"] and out["sections"]["mdna"])
+        self.assertEqual(out["flags"][0]["id"], "weak")
+        self.assertTrue(out["drivers"] and "18%" in out["drivers"][0])
+        self.assertTrue(any("artificial intelligence" in s for s in out["new_risks"]))
+        self.assertEqual(out["prior"]["period"], "2024-12-31")
+
+
+class Brief(unittest.TestCase):
+    def setUp(self):
+        engine._cache.clear()
+        self.sub = {"name": "ACME CORP", "filings": {"recent": {
+            "accessionNumber": ["0000000001-26-000010", "0000000001-26-000001", "0000000001-25-000001"],
+            "filingDate": ["2026-05-20", "2026-02-01", "2025-02-01"], "reportDate": ["", "2025-12-31", "2024-12-31"],
+            "form": ["8-K", "10-K", "10-K"], "primaryDocument": ["a.htm", "k26.htm", "k25.htm"], "items": ["2.02", "", ""]}}}
+        self.tickers = {"0": {"cik_str": 1234, "ticker": "ACME", "title": "Acme Corp"}, "1": {"cik_str": 99, "ticker": "BRK-B", "title": "Berkshire"}}
+
+    def fake(self, url, **k):
+        if url.endswith("company_tickers.json"):
+            return json.dumps(self.tickers).encode()
+        if "submissions" in url:
+            return json.dumps(self.sub).encode()
+        if "companyfacts" in url:
+            return json.dumps({"facts": facts_for(Y, [100, 120, 140, 160, 200], [10, 12, 14, 16, 24])}).encode()
+        raise AssertionError("unexpected fetch " + url)
+
+    def test_off_until_the_sec_identity_is_set(self):
+        with mock.patch.object(engine, "sec_agent", return_value=""):
+            self.assertEqual(company.get_company("ACME"), {"configured": False})
+            self.assertEqual(company.get_annual_report("ACME"), {"configured": False})
+
+    def test_us_company_brief(self):
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=self.fake):
+            out = company.get_company("acme")
+        self.assertTrue(out["supported"])
+        self.assertEqual(out["name"], "ACME CORP")
+        self.assertEqual(out["annual"]["period"], "2025-12-31")
+        self.assertEqual(out["annual"]["url"], "https://www.sec.gov/Archives/edgar/data/1234/000000000126000001/k26.htm")
+        self.assertEqual(out["financials"]["rows"]["revenue"][-1], 200)
+        self.assertTrue(out["developments"][0]["form"] in ("8-K", "10-K"))
+
+    def test_share_class_tickers_map_to_the_secs_spelling(self):
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=self.fake):
+            self.assertEqual(company.lookup("BRK.B")[0], 99)
+
+    def test_non_us_tickers_are_unsupported_not_errors(self):
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=self.fake):
+            self.assertEqual(company.get_company("0700.HK"), {"configured": True, "supported": False, "symbol": "0700.HK"})
+
+    def test_bad_symbols_are_refused_before_anything_is_fetched(self):
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=AssertionError("no fetch")):
+            for bad in ("", "a b", "x" * 40, "<script>"):
+                with self.assertRaises(ValueError):
+                    company.get_company(bad)
+
+    def test_a_failure_in_the_numbers_does_not_hide_the_rest(self):
+        def flaky(url, **k):
+            if "companyfacts" in url:
+                raise OSError("boom")
+            return self.fake(url, **k)
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=flaky):
+            out = company.get_company("ACME")
+        self.assertIn("financials_error", out)
+        self.assertTrue(out["developments"])
+
+    def test_sec_http_errors_become_friendly_messages(self):
+        import urllib.error
+        err = urllib.error.HTTPError("u", 429, "Too Many", {}, None)
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=err):
+            with self.assertRaises(ValueError) as cm:
+                company.get_company("ACME")
+        self.assertIn("HTTP 429", str(cm.exception))
+
+
+class AskTick(unittest.TestCase):
+    CO = {"configured": True, "supported": True, "name": "Acme Corp", "edgar": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1",
+          "annual": {"form": "10-K", "period": "2025-12-31", "url": "https://www.sec.gov/Archives/edgar/data/1/x/a.htm"},
+          "financials": {"read": [{"tone": "good", "text": "Revenue grew 25.0% to $200."}]},
+          "developments": [{"date": "2026-05-02", "form": "8-K", "tone": "bad", "items": [{"label": "Said past financial statements should not be relied on (restatement)"}]}]}
+    ANN = {"available": True, "flags": [{"label": "Weakness in its financial controls", "tone": "bad", "hedged": False, "text": "We identified a material weakness."},
+                                       {"label": "Doubt it can keep going", "tone": "info", "hedged": True, "text": "There could be doubt."}],
+           "new_risks": ["AI may erode demand."], "drivers": ["Revenue increased 18% primarily due to cloud."]}
+
+    def test_the_question_is_recognised(self):
+        for q in ("What's in Apple's annual report?", "Any red flags in Tesla's 10-K", "latest developments on Nvidia", "How is Ford's debt?"):
+            self.assertIn("report", tick_chat.intents(q), q)
+        self.assertNotIn("report", tick_chat.intents("Is Tesla undervalued?"))
+
+    def test_a_report_question_about_a_company_still_gets_an_entity_answer(self):
+        self.assertTrue(tick_chat.is_on_topic("What's in Apple's annual report?", [{"symbol": "AAPL"}], {"report", "concept"}))
+
+    def test_blocks_show_numbers_developments_and_only_stated_flags(self):
+        blocks, links = tick_chat.company_blocks("Acme", self.CO, self.ANN, True)
+        text = json.dumps(blocks)
+        self.assertIn("Revenue grew 25.0%", text)
+        self.assertIn("restatement", text)
+        self.assertIn("(serious)", text)
+        self.assertIn("material weakness", text)
+        self.assertNotIn("There could be doubt", text)   # hypothetical boilerplate is not a red flag
+        self.assertIn("AI may erode demand", text)
+        self.assertEqual(links[0]["engine"], "SEC EDGAR")
+
+    def test_slow_annual_report_is_explained_not_hidden(self):
+        blocks, _ = tick_chat.company_blocks("Acme", self.CO, None, True)
+        self.assertIn("takes a little while", json.dumps(blocks))
+
+    def test_every_unavailable_case_says_why(self):
+        self.assertIn("could not reach the SEC", json.dumps(tick_chat.company_blocks("A", None, None, False)[0]))
+        self.assertIn("switched off", json.dumps(tick_chat.company_blocks("A", {"configured": False}, None, False)[0]))
+        self.assertIn("US-listed", json.dumps(tick_chat.company_blocks("Tencent", {"configured": True, "supported": False}, None, False)[0]))
+
+    def test_the_language_model_gets_filings_but_never_the_users_notes(self):
+        ctx = {"quotes": {}, "news": [], "company": dict(self.CO, supported=True), "annual": self.ANN}
+        out = tick_chat.build_context("us", [], ctx, [], mem={"experience": "beginner", "markets": []})
+        self.assertIn("ANNUAL REPORT RED FLAG (stated)", out)
+        self.assertIn("FILING 2026-05-02 8-K", out)
+
+
+class Endpoints(unittest.TestCase):
+    def test_company_routes_are_public_and_limited_per_visitor(self):
+        self.assertIn("/api/company", server.ROUTES)
+        self.assertIn("/api/annual-report", server.ROUTES)
+        self.assertNotIn("/api/company", server.PROTECTED_WHEN_CLOUD)
+        tick_chat._recent.clear()
+        with mock.patch.object(company, "get_annual_report", return_value={"ok": 1}):
+            for _ in range(6):
+                server._get_annual({"symbol": ["AAPL"]}, None, "7.7.7.7")
+            with self.assertRaises(ValueError):
+                server._get_annual({"symbol": ["AAPL"]}, None, "7.7.7.7")
+            server._get_annual({"symbol": ["AAPL"]}, None, "8.8.8.8")   # someone else is unaffected
+        tick_chat._recent.clear()
+
+
+if __name__ == "__main__":
+    unittest.main()

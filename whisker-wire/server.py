@@ -29,6 +29,7 @@ from pathlib import Path
 
 import auth
 import cloud_memory
+import company
 import engine
 import mailing
 import memory
@@ -122,6 +123,20 @@ def _get_article(q, user, ip):
     return engine.get_article(q.get("url", [""])[0])
 
 
+def _company_symbol(q):
+    return (q.get("symbol") or [""])[0]
+
+
+def _get_company(q, user, ip):
+    tick_chat.rate_limit("company:" + ip, limit=20, window=600)   # each call can mean several fetches from the SEC
+    return company.get_company(_company_symbol(q))
+
+
+def _get_annual(q, user, ip):
+    tick_chat.rate_limit("annual:" + ip, limit=6, window=600)     # reading a whole annual report is the heaviest call here
+    return company.get_annual_report(_company_symbol(q))
+
+
 # path -> (largest body accepted in bytes, handler(body, user, ip))
 POST_ROUTES = {
     "/api/sec-contact": (2048, _post_sec),
@@ -145,6 +160,8 @@ ROUTES = {
     "/api/health": lambda q, u, ip: _health(_mk(q)),
     "/api/ticker": lambda q, u, ip: engine.get_ticker(q.get("symbol", [""])[0]),
     "/api/article": _get_article,
+    "/api/company": _get_company,
+    "/api/annual-report": _get_annual,
     "/api/auth/me": lambda q, u, ip: {"email": u["email"] if u else None, "cloud": auth.cloud_enabled(),
                                       "hosted": _hosted(), "memory": not _disabled("/api/memory")},
 }

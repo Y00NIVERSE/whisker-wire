@@ -732,9 +732,9 @@ def save_sec_contact(text, path=None):
     return text
 
 
-def _sec_get(url):
+def _sec_get(url, max_bytes=3_000_000, timeout=15):
     time.sleep(0.12)  # stay well under SEC's 10 requests/second limit
-    data, _ = http_get(url, headers={"User-Agent": sec_agent()}, timeout=15)
+    data, _ = http_get(url, headers={"User-Agent": sec_agent()}, timeout=timeout, max_bytes=max_bytes)
     return data
 
 

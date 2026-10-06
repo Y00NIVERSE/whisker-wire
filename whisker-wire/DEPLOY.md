@@ -77,7 +77,7 @@ never shown as working — nothing else breaks.
    - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET` (from step 1)
    - `ALLOWED_HOSTS` = your Render URL's hostname, e.g. `whisker-wire.onrender.com` (add your custom domain here too, comma-separated, once you have one)
    - `BUTTONDOWN_API_KEY` (from step 2, if using it)
-   - Optional: `SEC_USER_AGENT` = `Your Name your@email.com` — turns on SEC filings for every visitor, identifying you (the operator) to the SEC, as their automated-access rule requires. Without it, the Filings tab just says filings are off.
+   - `SEC_USER_AGENT` = `Your Name your@email.com` — turns on the **Filings tab and the Company briefs** (annual-report numbers, red flags, latest 8-K developments) for every visitor, identifying you (the operator) to the SEC, as their automated-access rule requires. Use a real name and an email you read: the SEC may write to it if the site ever misbehaves. Without it, both tabs just say they are switched off, and everything else works.
 5. Deploy. First load after any period of inactivity takes a few seconds to wake up (the free tier sleeps after 15 minutes idle) — that's expected, not a bug.
 
 ## Before sharing the link
