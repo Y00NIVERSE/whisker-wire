@@ -19,6 +19,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 from html.parser import HTMLParser
 
 import engine
@@ -207,18 +208,56 @@ def financials(facts, years=5):
         return None
     ends = sorted(anchor[3])[-years:]
     rows = {k: [_near(e, s[3]) for e in ends] for k, s in series.items() if s}
-    cur = (anchor[2] or "USD").split("/")[0]
+    if "cfo" in rows:
+        rows["fcf"] = [None if c is None else c - (x or 0) for c, x in zip(rows["cfo"], rows.get("capex", [None] * len(ends)))]
+    return _finish(ends, rows, (anchor[2] or "USD").split("/")[0])
 
+
+def _finish(ends, rows, cur):
+    """Margins, debt against equity and the plain-English read: the same for every source of numbers."""
     def per(a, b):
         return [round(x / y, 4) if x is not None and y not in (None, 0) else None for x, y in zip(rows.get(a, [None] * len(ends)), rows.get(b, [None] * len(ends)))]
     rows["gross_margin"] = per("gross_profit", "revenue")
     rows["operating_margin"] = per("operating_income", "revenue")
     rows["net_margin"] = per("net_income", "revenue")
-    if "cfo" in rows:
-        rows["fcf"] = [None if c is None else c - (x or 0) for c, x in zip(rows["cfo"], rows.get("capex", [None] * len(ends)))]
     rows["debt_to_equity"] = per("debt", "equity")
     out = {"currency": cur, "years": ends, "rows": rows}
     out["read"] = read(out)
+    return out
+
+
+# ---------------------------------------------------------------- numbers for every other market (Yahoo Finance)
+# Outside the US there is no free, official, automatic feed of company filings that permits programs to read it
+# (SGX, for one, keeps its announcements API behind a token meant for its own website). Yahoo's statement data is
+# unofficial but is what the rest of this app already leans on, and it covers the numbers for any market.
+YF_TS = "https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/"
+_YF = {"revenue": "annualTotalRevenue", "gross_profit": "annualGrossProfit", "operating_income": "annualOperatingIncome",
+       "net_income": "annualNetIncome", "cfo": "annualOperatingCashFlow", "fcf": "annualFreeCashFlow", "assets": "annualTotalAssets",
+       "equity": "annualStockholdersEquity", "cash": "annualCashAndCashEquivalents", "debt": "annualLongTermDebt",
+       "total_debt": "annualTotalDebt", "eps": "annualBasicEPS"}
+
+
+def yahoo_financials(symbol, years=5):
+    url = YF_TS + urllib.parse.quote(symbol) + "?type=" + ",".join(_YF.values()) + "&merge=false&period1=1300000000&period2=" + str(int(time.time()) + 86400)
+    data = json.loads(engine.http_get(url, timeout=20, max_bytes=2_000_000)[0])
+    got, cur = {}, None
+    for r in data.get("timeseries", {}).get("result") or []:
+        typ = (r.get("meta", {}).get("type") or [""])[0]
+        for key, name in _YF.items():
+            if name == typ:
+                pts = {p["asOfDate"]: p["reportedValue"]["raw"] for p in (r.get(typ) or []) if p and p.get("reportedValue")}
+                if pts:
+                    got[key] = pts
+                    cur = cur or next((p.get("currencyCode") for p in r[typ] if p and p.get("currencyCode")), None)
+    anchor = got.get("revenue") or got.get("net_income")
+    if not anchor:
+        return None
+    ends = sorted(anchor)[-years:]
+    rows = {k: [_near(e, v) for e in ends] for k, v in got.items() if k != "total_debt"}
+    if "debt" not in rows and "total_debt" in got:      # many companies only report total borrowings
+        rows["debt"] = [_near(e, got["total_debt"]) for e in ends]
+    out = _finish(ends, rows, cur or "USD")
+    out["source"] = "Yahoo Finance"
     return out
 
 
@@ -254,6 +293,12 @@ def read(f):
         d = (nm - pnm) * 100
         tone = "good" if d > 1 else "warn" if d < -2 else "info"
         out.append({"tone": tone, "text": f"Net margin (profit per dollar of sales) was {nm * 100:.1f}%, {'up' if d >= 0 else 'down'} from {pnm * 100:.1f}%."})
+    assets = g("assets")
+    if assets and rev and assets / rev > 12:
+        # A bank or insurer: its "debt", "cash" and "operating cash flow" are the business itself (deposits, loans,
+        # premiums), so the usual cash and borrowing rules would say something false.
+        out.append({"tone": "info", "text": "This looks like a bank or insurer, where cash flow, debt and cash mean something different from a normal company. Judge it on profit, growth and the capital figures in its own annual report."})
+        return out
     cfo = g("cfo")
     if cfo is not None and ni and ni > 0:
         r = cfo / ni
@@ -292,14 +337,41 @@ def _filing_ref(cik, row):
     return None if not row else {"form": row["form"], "filed": row["filingDate"], "period": row["reportDate"], "url": _doc_url(cik, row)}
 
 
+# Yahoo's exchange suffixes. A single trailing letter (BRK.B) is a share class, not an exchange.
+_EXCHANGE = re.compile(r"\.([A-Z]{2,3}|[LTV])$")
+_SUFFIX_MARKET = {"SI": "sg", "HK": "hk", "L": "uk", "T": "jp", "NS": "in", "BO": "in", "AX": "au", "TO": "ca", "V": "ca",
+                  "SS": "cn", "SZ": "cn", "DE": "eu", "PA": "eu", "AS": "eu", "MI": "eu", "MC": "eu", "SW": "eu",
+                  "ST": "eu", "CO": "eu", "OL": "eu", "HE": "eu", "BR": "eu", "LS": "eu", "VI": "eu", "IR": "eu"}
+
+
+def _clean_symbol(symbol):
+    s = (symbol or "").strip().upper()
+    if not engine.SYM_RE.match(s):
+        raise ValueError("bad symbol")
+    return s
+
+
+def _other_market(s):
+    """Not something the SEC covers: numbers only, from Yahoo, and links to the official portal for the rest."""
+    m = _EXCHANGE.search(s)
+    out = {"configured": True, "supported": False, "symbol": s, "market": _SUFFIX_MARKET.get(m.group(1)) if m else None}
+    try:
+        out["financials"] = engine.cached("yf:fin:" + s, 43200, lambda: yahoo_financials(s))
+    except Exception as e:
+        out["financials_error"] = type(e).__name__
+    return out
+
+
 def get_company(symbol):
+    s = _clean_symbol(symbol)
+    if _EXCHANGE.search(s):
+        return _other_market(s)          # needs no SEC identity: Yahoo only
     if not engine.sec_agent():
         return {"configured": False}
-    s = (symbol or "").strip().upper()
     try:
         hit = lookup(s)
         if not hit:
-            return {"configured": True, "supported": False, "symbol": s}
+            return _other_market(s)
         cik, name = hit
         sub = _submissions(cik)
         rows = _recent(sub)
@@ -422,7 +494,7 @@ def sentences(text):
 
 _HEDGE = re.compile(r"\b(could|may|might|would|if|potential|possible|risk (that|of)|from time to time|no assurance|cannot assure|unable to predict|"
                     r"(is|are) subject to|subject to the|exposed to|vulnerab\w+|susceptible|we face|faces|cannot|assurances?|"
-                    r"our policy|incident response|response plan|oversight|oversee\w*|audit committee|governance|reviews?|"
+                    r"our policy|incident response|response plan|oversight|oversee\w*|audit committee|governance|"
                     r"often|following periods of)\b", re.I)
 # A sentence saying the problem did NOT happen, an auditor describing what it checked for, or an accounting
 # policy ("carried at cost, less any recognized impairment") is not a red flag.
@@ -557,10 +629,49 @@ def analyze(cik, cur, prior):
     return out
 
 
+MAX_PASTE = 400_000
+
+
+def _unwrap(text):
+    """Text copied out of a PDF is hard-wrapped every ~80 characters, which would cut every sentence in half.
+    Join lines unless the previous one ended a sentence; blank lines stay as paragraph breaks."""
+    out, buf = [], ""
+    for raw in text.replace("\r", "").split("\n"):
+        line = raw.strip()
+        if not line:
+            if buf:
+                out.append(buf)
+            buf = ""
+        elif buf and not re.search(r"[.!?:”\"]$", buf):
+            buf += " " + line
+        else:
+            if buf:
+                out.append(buf)
+            buf = line
+    if buf:
+        out.append(buf)
+    return out
+
+
+def analyze_text(text):
+    """The same red-flag and 'why it moved' reading, over text a person pasted from an annual report. This is how
+    companies on exchanges with no free filings feed (Singapore, Hong Kong, London, ...) get read: the person
+    supplies the text, so nothing here fetches anything."""
+    text = (text or "").strip()[:MAX_PASTE]
+    if len(text) < 500:
+        raise ValueError("Paste a few paragraphs of the report first, for example its Risk Factors or Management Discussion section.")
+    lines = _unwrap(text)
+    joined = "\n".join(lines)
+    return {"available": True, "pasted": True, "words": len(joined.split()), "flags": scan_flags(joined),
+            "drivers": drivers(joined), "sections": {"risk": None, "mdna": None}, "prior": None, "new_risks": None}
+
+
 def get_annual_report(symbol):
+    s = _clean_symbol(symbol)
+    if _EXCHANGE.search(s):
+        return {"configured": True, "supported": False, "symbol": s}
     if not engine.sec_agent():
         return {"configured": False}
-    s = (symbol or "").strip().upper()
     try:
         hit = lookup(s)
         if not hit:

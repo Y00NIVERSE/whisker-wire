@@ -478,7 +478,12 @@ def company_blocks(name, co, annual, asked_annual):
     if not co.get("configured"):
         return [{"type": "p", "text": "Reading SEC filings is switched off on this site (the owner has not set up the SEC identity it requires)."}], []
     if not co.get("supported"):
-        return [{"type": "p", "text": f"I can only read filings automatically for US-listed companies. For {name}, the annual report and announcements are on its exchange's site (the Filings tab lists the right one)."}], []
+        blocks = []
+        fin = co.get("financials")
+        if fin and fin.get("read"):
+            blocks.append({"type": "ul", "title": f"What {name}'s latest annual numbers say (from Yahoo Finance, which can be late or wrong)", "items": [r["text"] for r in fin["read"]][:5]})
+        blocks.append({"type": "p", "text": f"I cannot read {name}'s annual report text or its announcements automatically: only the US publishes filings for programs to read. Open its exchange's announcement site (the Filings tab lists the right one), or paste a section of the annual report into the Company page and Tick will scan it for red flags."})
+        return blocks, []
     blocks, links = [], [{"title": f"{co['name']}: all filings on SEC EDGAR", "url": co["edgar"], "engine": "SEC EDGAR"}]
     fin = co.get("financials")
     if fin and fin.get("read"):
@@ -527,7 +532,7 @@ def retrieve(q, market, entities, want):
             term = re.sub(r"^\s*(what('?s| is| are| does)|explain|define|meaning of|how does|how do)\s+(a |an |the )?", "", q, flags=re.I).rstrip("?. ")
         if term:
             jobs["wiki"] = lambda: wiki_summary(term)
-    if entities and "report" in want and not re.search(r"\.[A-Z]{2,}$", entities[0]["symbol"]):
+    if entities and "report" in want:
         sym = entities[0]["symbol"]
         jobs["company"] = lambda: _quietly(company.get_company, sym)
         if _ANNUAL_Q.search(q):   # slow the first time (a whole filing); it keeps going after the deadline, so asking again is instant
@@ -605,7 +610,7 @@ def compose_entity(q, market, ents, ctx, want, mem=None):
     else:
         blocks.append({"type": "p", "text": "Yahoo did not give me live numbers for it just now, so check the price before you rely on anything below."})
     extra_sources = []
-    if "report" in want and ("company" in ctx or re.search(r"\.[A-Z]{2,}$", e["symbol"]) is None):
+    if "report" in want:
         more, extra_sources = company_blocks(e["name"], ctx.get("company"), ctx.get("annual"), bool(_ANNUAL_Q.search(q)))
         blocks += more
     hits = wire_hits(market, ents)
@@ -841,6 +846,8 @@ def build_context(market, ents, ctx, sources, mem=None):
             lines += [f"ANNUAL REPORT RED FLAG ({'mentioned as a possible risk' if f['hedged'] else 'stated'}): {f['label']}: {f['text']}" for f in ann["flags"][:4]]
             lines += ["ANNUAL REPORT NEW RISK WORDING: " + s for s in (ann.get("new_risks") or [])[:3]]
             lines += ["ANNUAL REPORT MANAGEMENT SAYS: " + s for s in (ann.get("drivers") or [])[:3]]
+    elif co and (co.get("financials") or {}).get("read"):   # not a US filer: numbers only, from Yahoo
+        lines.append("ANNUAL NUMBERS (Yahoo Finance, unofficial; annual report text not available): " + " | ".join(r["text"] for r in co["financials"]["read"][:5]))
     lines.append("SOURCES:")
     for s in sources:
         lines.append(f"[{s['n']}] {s['title']} ({s['engine']})")

@@ -137,11 +137,17 @@ def _get_annual(q, user, ip):
     return company.get_annual_report(_company_symbol(q))
 
 
+def _post_analyze(body, user, ip):
+    tick_chat.rate_limit("paste:" + ip, limit=8, window=600)
+    return company.analyze_text(body.get("text", ""))
+
+
 # path -> (largest body accepted in bytes, handler(body, user, ip))
 POST_ROUTES = {
     "/api/sec-contact": (2048, _post_sec),
     "/api/chat": (8192, _post_chat),
     "/api/memory": (8192, _post_memory),
+    "/api/analyze-text": (company.MAX_PASTE * 2 + 1024, _post_analyze),   # JSON escaping can double the size
     "/api/auth/signup": (512, _noop),
     "/api/auth/login": (512, _noop),
     "/api/auth/logout": (256, _noop),

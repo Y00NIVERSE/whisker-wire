@@ -275,6 +275,10 @@ class ReadingTheReport(unittest.TestCase):
         self.assertEqual(company.scan_flags("At this time, we have no such class actions filed against us and we are not aware of any pending claims."), [])
         self.assertEqual(company.scan_flags("(a)2023 includes $28 million related to restructuring charges in India and $41 million in North America."), [])
 
+    def test_the_phrase_period_under_review_does_not_hide_a_real_finding(self):
+        s = "Management concluded that internal control over financial reporting was not effective because of a material weakness identified in the period under review."
+        self.assertFalse(company.scan_flags(s)[0]["hedged"])
+
     def test_half_sentences_are_not_offered_as_new_risks(self):
         old = "Our business could be harmed by supply chain disruption that delays shipments of key components to our customers worldwide. " * 3
         new = "and caused disruptions in our production operations, which may increase the risk of adverse effects on revenue in future periods and years."
@@ -346,6 +350,48 @@ class ReadingTheReport(unittest.TestCase):
         self.assertEqual(out["prior"]["period"], "2024-12-31")
 
 
+def yahoo_payload(years, rev, ni, total_debt=None, equity=None, cur="SGD"):
+    """Yahoo's fundamentals-timeseries shape: one result per type, each a list of dated reported values."""
+    def one(typ, vals):
+        return {"meta": {"type": [typ]}, typ: [{"asOfDate": f"{y}-12-31", "currencyCode": cur, "reportedValue": {"raw": v}} for y, v in zip(years, vals)]}
+    res = [one("annualTotalRevenue", rev), one("annualNetIncome", ni)]
+    if total_debt:
+        res.append(one("annualTotalDebt", total_debt))
+    if equity:
+        res.append(one("annualStockholdersEquity", equity))
+    return {"timeseries": {"result": res, "error": None}}
+
+
+class PastedReports(unittest.TestCase):
+    def test_wrapped_pdf_text_is_joined_back_into_sentences(self):
+        pdf = ("The Group recorded an impairment charge of $412 million on its\nEuropean property portfolio during the year.\n"
+               "Management identified a material weakness in controls over\nfinancial reporting at year end.\n\nSeparate paragraph here.")
+        lines = company._unwrap(pdf)
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[0].startswith("The Group recorded") and "European property" in lines[0])
+
+    def test_scanning_pasted_text_finds_flags_and_reasons(self):
+        text = ("Revenue increased 12% primarily due to higher loan volumes in the consumer banking segment across the region this year. " * 2
+                + "\nThe Group recorded an impairment charge of $412 million on its\nEuropean property portfolio during the year.\n"
+                + "Management concluded that internal control over financial reporting was not effective because of a material weakness identified in the period.\n"
+                + BOILER)
+        out = company.analyze_text(text)
+        self.assertTrue(out["pasted"])
+        flags = {f["id"]: f for f in out["flags"]}
+        self.assertFalse(flags["impair"]["hedged"])
+        self.assertEqual(flags["weak"]["tone"], "bad")
+        self.assertTrue(out["drivers"] and "12%" in out["drivers"][0])
+        self.assertIsNone(out["new_risks"])
+
+    def test_too_little_text_is_asked_for_more(self):
+        with self.assertRaises(ValueError):
+            company.analyze_text("just a sentence")
+
+    def test_huge_pastes_are_capped(self):
+        out = company.analyze_text("Revenue grew. " * 100_000)
+        self.assertLessEqual(out["words"], company.MAX_PASTE // 5)
+
+
 class Brief(unittest.TestCase):
     def setUp(self):
         engine._cache.clear()
@@ -383,9 +429,59 @@ class Brief(unittest.TestCase):
         with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=self.fake):
             self.assertEqual(company.lookup("BRK.B")[0], 99)
 
-    def test_non_us_tickers_are_unsupported_not_errors(self):
-        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=self.fake):
-            self.assertEqual(company.get_company("0700.HK"), {"configured": True, "supported": False, "symbol": "0700.HK"})
+    def test_non_us_tickers_get_numbers_not_filings_and_never_touch_the_sec(self):
+        yf = yahoo_payload(Y, [100e9, 120e9, 140e9, 160e9, 200e9], [10e9, 12e9, 14e9, 16e9, 24e9])
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), \
+                mock.patch.object(engine, "_sec_get", side_effect=AssertionError("the SEC must not be asked about a Singapore stock")), \
+                mock.patch.object(engine, "http_get", return_value=(json.dumps(yf).encode(), "utf-8")) as get:
+            out = company.get_company("D05.SI")
+        self.assertEqual((out["configured"], out["supported"], out["market"]), (True, False, "sg"))
+        self.assertEqual(out["financials"]["source"], "Yahoo Finance")
+        self.assertEqual(out["financials"]["currency"], "SGD")
+        self.assertIn("Revenue grew 25.0%", out["financials"]["read"][0]["text"])
+        self.assertTrue(get.call_args[0][0].startswith("https://query1.finance.yahoo.com/ws/fundamentals-timeseries/"))
+
+    def test_other_markets_work_without_any_sec_identity(self):
+        yf = yahoo_payload(Y, [100e9] * 5, [10e9] * 5)
+        with mock.patch.object(engine, "sec_agent", return_value=""), mock.patch.object(engine, "http_get", return_value=(json.dumps(yf).encode(), "utf-8")):
+            self.assertTrue(company.get_company("0700.HK")["financials"])
+            self.assertEqual(company.get_company("AAPL"), {"configured": False})   # a US ticker still needs the identity
+
+    def test_a_failure_fetching_other_market_numbers_is_reported_not_raised(self):
+        with mock.patch.object(engine, "sec_agent", return_value=""), mock.patch.object(engine, "http_get", side_effect=OSError("boom")):
+            out = company.get_company("7203.T")
+        self.assertEqual(out["market"], "jp")
+        self.assertIn("financials_error", out)
+
+    def test_share_classes_are_not_mistaken_for_exchanges(self):
+        self.assertIsNone(company._EXCHANGE.search("BRK.B"))
+        for s, m in (("D05.SI", "sg"), ("0700.HK", "hk"), ("HSBA.L", "uk"), ("7203.T", "jp"), ("RELIANCE.NS", "in"), ("BHP.AX", "au")):
+            self.assertEqual(company._SUFFIX_MARKET[company._EXCHANGE.search(s).group(1)], m, s)
+
+    def test_annual_report_for_another_market_is_politely_unsupported(self):
+        with mock.patch.object(engine, "sec_agent", return_value=""):
+            self.assertEqual(company.get_annual_report("D05.SI"), {"configured": True, "supported": False, "symbol": "D05.SI"})
+
+    def test_banks_that_only_report_total_borrowings_still_show_debt(self):
+        yf = yahoo_payload(Y, [100e9] * 5, [10e9] * 5, total_debt=[75e9] * 5, equity=[20e9] * 5)
+        with mock.patch.object(engine, "http_get", return_value=(json.dumps(yf).encode(), "utf-8")):
+            f = company.yahoo_financials("D05.SI")
+        self.assertEqual(f["rows"]["debt"][-1], 75e9)
+        self.assertTrue(any("times shareholders' equity" in r["text"] for r in f["read"]))
+
+    def test_a_bank_is_not_judged_by_normal_company_cash_and_debt_rules(self):
+        f = company.financials(facts_for(Y, [100] * 5, [30] * 5, cfo=[5] * 5, debt=[900] * 5, equity=[50] * 5, cash=[2000] * 5)
+                               | {"us-gaap": dict(facts_for(Y, [100] * 5, [30] * 5, cfo=[5] * 5, debt=[900] * 5, equity=[50] * 5, cash=[2000] * 5)["us-gaap"],
+                                                  Assets={"units": {"USD": [{"end": f"{y}-12-31", "val": 4500, "form": "10-K", "filed": f"{y + 1}-02-10"} for y in Y]}})})
+        text = " ".join(r["text"] for r in f["read"])
+        self.assertIn("bank or insurer", text)
+        self.assertNotIn("cents of each dollar", text)
+        self.assertNotIn("heavily borrowed", text)
+        self.assertNotIn("more cash", text)
+
+    def test_yahoo_with_nothing_for_a_symbol_is_none(self):
+        with mock.patch.object(engine, "http_get", return_value=(b'{"timeseries": {"result": [], "error": null}}', "utf-8")):
+            self.assertIsNone(company.yahoo_financials("NOPE.SI"))
 
     def test_bad_symbols_are_refused_before_anything_is_fetched(self):
         with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=AssertionError("no fetch")):
@@ -447,7 +543,15 @@ class AskTick(unittest.TestCase):
     def test_every_unavailable_case_says_why(self):
         self.assertIn("could not reach the SEC", json.dumps(tick_chat.company_blocks("A", None, None, False)[0]))
         self.assertIn("switched off", json.dumps(tick_chat.company_blocks("A", {"configured": False}, None, False)[0]))
-        self.assertIn("US-listed", json.dumps(tick_chat.company_blocks("Tencent", {"configured": True, "supported": False}, None, False)[0]))
+        text = json.dumps(tick_chat.company_blocks("Tencent", {"configured": True, "supported": False}, None, False)[0])
+        self.assertIn("only the US publishes filings", text)
+        self.assertIn("paste a section", text)
+
+    def test_other_market_numbers_are_shown_with_their_source_caveat(self):
+        co = {"configured": True, "supported": False, "financials": {"read": [{"tone": "good", "text": "Revenue grew 4.0% to S$22.9B."}]}}
+        text = json.dumps(tick_chat.company_blocks("DBS", co, None, False)[0])
+        self.assertIn("Revenue grew 4.0%", text)
+        self.assertIn("Yahoo Finance, which can be late or wrong", text)
 
     def test_the_language_model_gets_filings_but_never_the_users_notes(self):
         ctx = {"quotes": {}, "news": [], "company": dict(self.CO, supported=True), "annual": self.ANN}
@@ -460,6 +564,8 @@ class Endpoints(unittest.TestCase):
     def test_company_routes_are_public_and_limited_per_visitor(self):
         self.assertIn("/api/company", server.ROUTES)
         self.assertIn("/api/annual-report", server.ROUTES)
+        self.assertIn("/api/analyze-text", server.POST_ROUTES)
+        self.assertNotIn("/api/analyze-text", server.PROTECTED_WHEN_CLOUD)
         self.assertNotIn("/api/company", server.PROTECTED_WHEN_CLOUD)
         tick_chat._recent.clear()
         with mock.patch.object(company, "get_annual_report", return_value={"ok": 1}):
