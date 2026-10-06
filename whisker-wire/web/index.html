@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whisker Wire: stock news radar for newer traders</title>
+<meta name="description" content="Whisker Wire reads 80+ independent news feeds, ranks the stories most likely to move a stock, and shows how well each is confirmed. Covers the US, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe.">
+<link rel="preload" href="/fonts/bricolage-grotesque-normal-500-800-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/fonts.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314221C'/%3E%3Cpath d='M6 24V9l6 5h8l6-5v15z' fill='%23E39B0B'/%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the wire</a>
+
+<!-- Tick, drawn once and cloned by JS so the brand mark and the reader cat share one drawing. -->
+<template id="tick-tpl">
+  <svg class="tick-svg" viewBox="0 0 150 140" role="img" aria-label="Tick, a tabby cat wearing round glasses">
+    <g class="tick-tail">
+      <path d="M108 112 C140 108 146 70 124 62" fill="none" stroke="var(--cat)" stroke-width="11" stroke-linecap="round"/>
+      <path d="M133 98 l7 -4 M137 84 l8 -2 M130 70 l6 -6" stroke="var(--cat-dark)" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <ellipse cx="76" cy="108" rx="36" ry="27" fill="var(--cat)"/>
+    <path d="M52 96 q6 8 0 16 M100 96 q-6 8 0 16" stroke="var(--cat-dark)" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <ellipse cx="61" cy="130" rx="10" ry="6.5" fill="var(--cat-light)"/>
+    <ellipse cx="91" cy="130" rx="10" ry="6.5" fill="var(--cat-light)"/>
+    <g class="tick-head">
+      <g class="tick-ears">
+        <path d="M42 50 L45 15 L67 35 Z" fill="var(--cat)"/><path d="M48 41 L49 25 L60 35 Z" fill="var(--cat-ear)"/>
+        <path d="M110 50 L107 15 L85 35 Z" fill="var(--cat)"/><path d="M104 41 L103 25 L92 35 Z" fill="var(--cat-ear)"/>
+      </g>
+      <ellipse cx="76" cy="60" rx="35" ry="30" fill="var(--cat)"/>
+      <path d="M76 31 v11 M67 33 l2.5 9 M85 33 l-2.5 9" stroke="var(--cat-dark)" stroke-width="3.2" stroke-linecap="round"/>
+      <path d="M43 58 h8 M44 66 l7 -2 M109 58 h-8 M108 66 l-7 -2" stroke="var(--cat-dark)" stroke-width="2.6" stroke-linecap="round"/>
+      <ellipse cx="76" cy="72" rx="14" ry="10" fill="var(--cat-light)"/>
+      <g class="tick-eyes">
+        <g class="tick-eye"><ellipse cx="62" cy="58" rx="6" ry="7" fill="#fff"/><ellipse class="tick-pupil" cx="62" cy="58" rx="2.4" ry="5.2" fill="#14221C"/></g>
+        <g class="tick-eye"><ellipse cx="90" cy="58" rx="6" ry="7" fill="#fff"/><ellipse class="tick-pupil" cx="90" cy="58" rx="2.4" ry="5.2" fill="#14221C"/></g>
+        <g class="tick-lids"><path d="M55 58 q7 5 14 0" fill="none" stroke="#14221C" stroke-width="2.4" stroke-linecap="round"/><path d="M83 58 q7 5 14 0" fill="none" stroke="#14221C" stroke-width="2.4" stroke-linecap="round"/></g>
+      </g>
+      <g fill="none" stroke="var(--glass)" stroke-width="2.4"><circle cx="62" cy="58" r="10.5"/><circle cx="90" cy="58" r="10.5"/><path d="M72.5 57 q3.5 -3 7 0"/><path d="M51.5 56 L44 52 M100.5 56 L108 52"/></g>
+      <path d="M72 70 h8 l-4 4.5 Z" fill="#D9647E"/>
+      <path d="M76 74.5 v3 M76 77.5 q-4 4 -8 1 M76 77.5 q4 4 8 1" fill="none" stroke="#14221C" stroke-width="1.9" stroke-linecap="round"/>
+    </g>
+  </svg>
+</template>
+
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="/" aria-label="Whisker Wire home">
+      <span class="brand-cat" data-tick="mini"></span>
+      <span class="brand-text">
+        <span class="brand-name">Whisker Wire</span>
+        <span class="brand-sub">Stock news radar for newer traders</span>
+      </span>
+    </a>
+    <nav class="tabs" aria-label="Sections" id="tabs">
+      <button class="tab is-on" data-view="wire" aria-pressed="true">Wire</button>
+      <button class="tab" data-view="radar" aria-pressed="false">Value Radar</button>
+      <button class="tab" data-view="filings" aria-pressed="false">Filings</button>
+      <button class="tab" data-view="company" aria-pressed="false">Company</button>
+      <button class="tab" data-view="memory" aria-pressed="false">Tick remembers</button>
+      <button class="tab" id="tab-how" aria-pressed="false">Sources &amp; scoring</button>
+      <button class="tab tab-read" id="open-reader" aria-pressed="false">Read here</button>
+    </nav>
+    <div class="status">
+      <span class="live" id="live" role="status" aria-live="polite"><i class="dot"></i><span id="updated">Connecting</span></span>
+      <button class="ghost" id="alerts" title="Get a desktop alert when something urgent lands">Alerts</button>
+      <button class="ghost" id="theme" aria-label="Switch color theme">Theme</button>
+      <button class="ghost" id="login-btn" hidden>Log in</button>
+      <span class="account" id="account" hidden><span class="account-email" id="account-email"></span><button class="ghost" id="logout">Log out</button></span>
+    </div>
+  </div>
+  <div class="markets-wrap">
+    <span class="mk-label" id="mk-label">Market</span>
+    <div class="markets" id="markets" role="group" aria-labelledby="mk-label"></div>
+  </div>
+  <div class="strip" id="strip" aria-label="Market snapshot"></div>
+  <div class="tape" id="tape" aria-hidden="true">
+    <div class="tape-mask">
+      <div class="tape-track" id="tape-track"></div>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="grid">
+  <section class="col-main" aria-live="polite">
+    <div class="view is-on" id="view-wire">
+      <section class="hero" aria-labelledby="hero-h">
+        <div class="hero-head">
+          <p class="eyebrow">What is Whisker Wire?</p>
+          <button class="ghost hero-toggle" id="hero-toggle" aria-expanded="true" aria-controls="hero-more">Hide details</button>
+        </div>
+        <h1 id="hero-h">A stock-news radar for newer traders.</h1>
+        <div id="hero-more">
+        <p class="lede">It reads 80+ independent news feeds across ten markets, ranks the stories most likely to move a stock, and shows how well each one is confirmed. Tick the cat then reads any article with you and highlights the key numbers, red flags and jargon in plain English.</p>
+        <ul class="hero-points">
+          <li><b>The Wire</b><span>Today's stories, ranked, with who reported each one.</span></li>
+          <li><b>Value Radar</b><span>Stocks the market has marked down, with the traps.</span></li>
+          <li><b>Tick</b><span>A cat that reads with you and explains what matters.</span></li>
+        </ul>
+        <p class="hero-note">Ten markets: United States, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe. Free, with no ads and no tracking. Education, not financial advice.</p>
+        </div>
+      </section>
+      <section class="ask" id="ask" aria-labelledby="ask-h">
+        <div class="ask-head">
+          <span class="ask-cat" data-tick="mini" aria-hidden="true"></span>
+          <div>
+            <h2 id="ask-h">Ask Tick about money and markets</h2>
+            <p class="small ask-mode">Checking how I can answer…</p>
+          </div>
+        </div>
+        <div class="ask-chips" id="home-chips" aria-label="Suggested questions"></div>
+        <form class="ask-form" id="home-ask-form" autocomplete="off">
+          <label for="home-ask-in" class="sr">Your question for Tick</label>
+          <input id="home-ask-in" maxlength="400" placeholder="Ask about a stock, a term, or how markets work…">
+          <button class="primary" type="submit">Ask</button>
+        </form>
+        <p class="fine">Tick answers in the panel at the bottom right, on every page. He reads Yahoo Finance, Google News, Bing News and Wikipedia. Not about money? He will point you to Google. Education, not financial advice.</p>
+      </section>
+      <h2 class="section-h" id="wire-top">Today's wire: <span id="mkt-name">United States</span></h2>
+      <p class="mkt-note small" id="mkt-note" hidden></p>
+      <section class="start" id="start" aria-label="Start here">
+        <p class="eyebrow">Start here: the top three, in plain English</p>
+        <ol class="start-list" id="start-list"></ol>
+      </section>
+      <div class="toolbar">
+        <div class="chips" id="filters" role="group" aria-label="Filter stories"></div>
+        <div class="tools">
+          <button class="ghost" id="btn-sources" aria-expanded="false" aria-controls="panel">Sources <span class="n" id="src-count"></span></button>
+          <button class="ghost" id="btn-how" aria-expanded="false" aria-controls="panel">How scoring works</button>
+          <form class="watch" id="watch-form" autocomplete="off">
+            <label for="watch-in" class="sr">Add a ticker to your watchlist</label>
+            <input id="watch-in" placeholder="Add ticker, e.g. NVDA or 0700.HK" maxlength="14" spellcheck="false">
+            <button class="ghost" type="submit">Watch</button>
+          </form>
+        </div>
+      </div>
+      <section class="panel" id="panel" hidden aria-label="Sources and scoring">
+        <div class="panel-col" id="sec-sources">
+          <p class="eyebrow">Your mix, your call</p>
+          <p class="small">Turn source types on or off. Nothing is ranked down for its politics, only for its evidence.</p>
+          <div class="chips kinds" id="kinds" role="group" aria-label="Source types"></div>
+          <p class="eyebrow gap">Source health</p>
+          <ul class="health" id="health"></ul>
+        </div>
+        <div class="panel-col" id="sec-how">
+          <p class="eyebrow">How a story is scored</p>
+          <p class="small mono">points = top 3 signal weights<br>+ fresh (0 to 3)<br>+ other outlets (0 to 3)<br>+ ticker found (1)<br>&minus; 2 if the headline is a question</p>
+          <ul class="defs">
+            <li><b>Urgent</b> 8 or more points, and confirmed: two or more outlets, or one major or official source.</li>
+            <li><b>Watch</b> 5 to 7 points, or 8 or more with only one lesser-known outlet so far.</li>
+            <li><b>Single source</b> Only one outlet reported it. Wait for a second, or the filing itself.</li>
+            <li><b>Corroborated</b> Two or more different outlets reported the same story.</li>
+            <li><b>Not in big headlines</b> A strong signal that the big outlets (CNBC, Reuters, SCMP, BBC and similar) are not carrying yet. Early, but unconfirmed.</li>
+          </ul>
+          <p class="small">Click any story's score to see exactly how it was built.</p>
+        </div>
+        <div class="panel-col" id="sec-track">
+          <p class="eyebrow">Track record (measured by this app)</p>
+          <div id="track-body"></div>
+          <p class="eyebrow gap">Preferences</p>
+          <label class="switch"><input type="checkbox" id="serious"><span>Serious mode: hide the cat mascot</span></label>
+        </div>
+      </section>
+      <div class="chips watching" id="watching" aria-label="Your watchlist"></div>
+      <ol class="wire" id="wire-list"></ol>
+      <nav class="pager" id="wire-pager" aria-label="Wire pages" hidden></nav>
+      <p class="empty" id="wire-empty" hidden>Nothing matches those filters right now. Tick is napping.</p>
+    </div>
+
+    <div class="view" id="view-radar">
+      <div class="intro">
+        <p class="eyebrow">Value radar</p>
+        <h1>Stocks the market has marked down, with the reasons to buy and the ways it goes wrong.</h1>
+        <p class="lede">Ranked by a transparent 0 to 100 score built from discount to the 52-week high, forward earnings, book value, analyst view and unusual volume. Cheap is a question, not an answer.</p>
+      </div>
+      <div class="chips" id="radar-filters" role="group" aria-label="Filter radar"></div>
+      <div class="radar" id="radar-list"></div>
+      <nav class="pager" id="radar-pager" aria-label="Value Radar pages" hidden></nav>
+    </div>
+
+    <div class="view" id="view-filings">
+      <div class="intro">
+        <p class="eyebrow">Official filings</p>
+        <h1>What insiders and big holders just told the SEC.</h1>
+        <p class="lede">Executives and 10% owners must report trades within two business days. Buying with their own money is the signal worth reading; selling is noisy.</p>
+      </div>
+      <div id="filings-body"></div>
+    </div>
+
+    <div class="view" id="view-company">
+      <div class="intro">
+        <p class="eyebrow">Company brief</p>
+        <h1>Beyond the headline: the numbers, the annual report and the latest filings.</h1>
+        <p class="lede">The news is still the main event. This is for when a story makes you ask whether the company behind it is actually any good: five years of results, red flags and what changed in its annual report, and what it has just told the SEC. For US-listed companies everything comes straight from the SEC. For Singapore, Hong Kong, London and other markets you get the numbers plus a box to paste annual-report text into, because those exchanges publish no free feed that a program may read.</p>
+      </div>
+      <form class="sec-form" id="co-form" autocomplete="off">
+        <label for="co-in" class="sr">Ticker symbol</label>
+        <input id="co-in" maxlength="12" placeholder="Ticker, e.g. AAPL" spellcheck="false">
+        <button class="primary" type="submit">Look up</button>
+      </form>
+      <div class="chips" id="co-chips" aria-label="Try one"></div>
+      <div id="company-body"></div>
+    </div>
+
+    <div class="view" id="view-memory">
+      <div class="intro">
+        <p class="eyebrow">Tick remembers</p>
+        <h1>What Tick knows about you, all on one page.</h1>
+        <p class="lede" id="memory-lede">You can read it, change it, export it or delete it. It is one small file on this computer. It is never sent to a search engine or an AI service.</p>
+      </div>
+      <div id="memory-body"></div>
+    </div>
+  </section>
+
+  <aside class="col-rail" aria-label="Side rail">
+    <section class="rail-sec rail-top3">
+      <p class="eyebrow">Tick's top three right now</p>
+      <ol class="top3" id="top3"></ol>
+    </section>
+    <section class="rail-sec">
+      <p class="eyebrow">Read this before you trade</p>
+      <ul class="rules">
+        <li><b>Single source</b> means unconfirmed. Wait for a second outlet or the filing itself.</li>
+        <li><b>Public news is priced in fast.</b> Being early is a bonus, not a promise. Size small.</li>
+        <li><b>Never trade on non-public information.</b> That is illegal insider trading.</li>
+      </ul>
+    </section>
+    <p class="fine">Education, not advice. Data comes from public feeds and can be delayed or wrong. No ads and no tracking, and this app does not log what you read.</p>
+  </aside>
+</main>
+
+<button class="fab" id="tick-fab" aria-label="Open Tick, your finance helper" aria-expanded="false" aria-controls="tick-pop">
+  <span class="fab-cat" data-tick="mini" aria-hidden="true"></span>
+  <span class="fab-hint" aria-hidden="true">Ask Tick</span>
+</button>
+
+<section class="tickpop" id="tick-pop" role="dialog" aria-modal="false" aria-labelledby="tp-title" hidden>
+  <header class="tp-head">
+    <span class="tp-cat" data-tick="mini" aria-hidden="true"></span>
+    <div class="tp-title"><h2 id="tp-title">Tick</h2><p class="small">Your finance helper</p></div>
+    <button class="ghost" id="tp-close" type="button" aria-label="Close Tick">Close</button>
+  </header>
+  <div class="tp-tabs" role="tablist" aria-label="What Tick can do">
+    <button role="tab" id="tp-tab-ask" aria-controls="tp-ask" aria-selected="true" data-tp="ask" type="button">Ask</button>
+    <button role="tab" id="tp-tab-mine" aria-controls="tp-mine" aria-selected="false" data-tp="mine" type="button" tabindex="-1">Remembers</button>
+    <button role="tab" id="tp-tab-read" aria-controls="tp-read" aria-selected="false" data-tp="read" type="button" tabindex="-1">Read</button>
+  </div>
+  <div class="tp-body">
+    <div class="tp-panel" id="tp-ask" role="tabpanel" aria-labelledby="tp-tab-ask">
+      <div class="ask-log" id="ask-log" role="log" aria-live="polite" aria-label="Conversation with Tick"></div>
+      <div class="ask-chips" id="ask-chips" aria-label="Suggested questions"></div>
+      <form class="ask-form" id="ask-form" autocomplete="off">
+        <label for="ask-in" class="sr">Your question for Tick</label>
+        <input id="ask-in" maxlength="400" placeholder="Ask about a stock, a term, or how markets work…">
+        <button class="primary" id="ask-go" type="submit">Ask</button>
+      </form>
+      <p class="fine ask-mode"></p>
+    </div>
+    <div class="tp-panel" id="tp-mine" role="tabpanel" aria-labelledby="tp-tab-mine" hidden>
+      <div id="tp-mine-body"></div>
+    </div>
+    <div class="tp-panel" id="tp-read" role="tabpanel" aria-labelledby="tp-tab-read" hidden>
+      <p class="small">Paste an article, a filing excerpt or a link. Tick reads it with you and highlights the key numbers, red flags and jargon.</p>
+      <form class="tp-read-form" id="tp-read-form">
+        <label for="tp-read-in" class="sr">Article text or link</label>
+        <textarea id="tp-read-in" rows="9" placeholder="https://… or paste the text"></textarea>
+        <button class="primary" type="submit">Let Tick read it</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<div class="scrim" id="auth-scrim" hidden></div>
+<section class="auth-modal" id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-h" hidden>
+  <button class="ghost auth-close" id="auth-close" type="button" aria-label="Close">Close</button>
+  <p class="auth-reason" id="auth-reason" hidden></p>
+  <h2 id="auth-h" class="sr">Account</h2>
+  <div class="seg" role="tablist" aria-label="Sign up or log in">
+    <button role="tab" id="tab-signup" aria-selected="true" type="button">Create free account</button>
+    <button role="tab" id="tab-login" aria-selected="false" type="button" tabindex="-1">Log in</button>
+  </div>
+
+  <form id="signup-form" class="auth-form">
+    <label for="su-email">Email</label>
+    <input id="su-email" type="email" autocomplete="email" required maxlength="200">
+    <label for="su-pass">Password</label>
+    <input id="su-pass" type="password" autocomplete="new-password" required minlength="8" maxlength="200">
+    <p class="fine">At least 8 characters.</p>
+    <label class="switch auth-check"><input type="checkbox" id="su-news"><span>Send me the occasional email newsletter</span></label>
+    <button class="primary" type="submit">Create free account</button>
+    <p class="fine">By continuing you agree to the <a href="/privacy.html">privacy policy</a>. No credit card, ever.</p>
+    <p class="auth-msg" role="status" aria-live="polite"></p>
+  </form>
+
+  <form id="login-form" class="auth-form" hidden>
+    <label for="li-email">Email</label>
+    <input id="li-email" type="email" autocomplete="email" required maxlength="200">
+    <label for="li-pass">Password</label>
+    <input id="li-pass" type="password" autocomplete="current-password" required maxlength="200">
+    <button class="primary" type="submit">Log in</button>
+    <p class="auth-msg" role="status" aria-live="polite"></p>
+  </form>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<aside class="drawer" id="reader" aria-hidden="true" aria-label="Reader with Tick">
+  <div class="drawer-bar">
+    <button class="ghost" id="reader-close" aria-label="Close reader">Close</button>
+    <div class="seg" role="group" aria-label="Reader input">
+      <button id="mode-article" class="is-on">Article</button>
+      <button id="mode-paste">Paste text or link</button>
+    </div>
+    <div class="bar-right">
+      <span class="pg-tag" id="rpage-tag" aria-live="polite"></span>
+      <label class="switch"><input type="checkbox" id="cat-on" checked><span>Tick on</span></label>
+    </div>
+  </div>
+  <div class="drawer-scroll" id="reader-scroll">
+    <div class="paste" id="paste" hidden>
+      <label for="paste-in">Paste an article, a filing excerpt, or a link. Paywalled? Paste the text.</label>
+      <textarea id="paste-in" rows="8" placeholder="https://... or the article text"></textarea>
+      <button class="primary" id="paste-go">Let Tick read it</button>
+    </div>
+    <div class="reader-head" id="reader-head"></div>
+    <section class="take" id="take" hidden></section>
+    <div class="reader-body" id="reader-body">
+      <article class="article" id="article" tabindex="-1"></article>
+      <nav class="rpager" id="rpager" aria-label="Article pages" hidden></nav>
+    </div>
+  </div>
+  <div class="cat" id="cat" data-state="idle" aria-live="polite" hidden>
+    <div class="cat-note" id="cat-note"></div>
+    <div class="cat-fig" id="cat-fig" data-tick="full"></div>
+  </div>
+</aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

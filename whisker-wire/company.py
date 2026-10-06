@@ -1,0 +1,693 @@
+"""Company brief: what a company's annual report says, and what it has just told the SEC.
+
+Three things, for US-listed companies (the SEC publishes these for free, so they can be read automatically):
+  - the numbers: five years of revenue, profit, cash flow and debt from the SEC's structured data,
+    with a plain-English read of where they are heading;
+  - the annual report itself: red-flag phrases, the stated reasons behind the year's changes, and risk
+    wording that is new since last year's report;
+  - latest developments: recent 8-K filings, each item translated out of SEC code.
+
+Every URL fetched here is built from identifiers the SEC itself issued (a CIK number, an accession number,
+a file name checked against a strict pattern), never from anything a visitor typed, so this adds no new way
+to point the server somewhere else. Standard library only. Needs the same SEC identity as the Filings tab
+(sec_contact.txt, or SEC_USER_AGENT on a host).
+"""
+import calendar
+import datetime
+import json
+import re
+import threading
+import time
+import urllib.error
+import urllib.parse
+from html.parser import HTMLParser
+
+import engine
+
+DATA = "https://data.sec.gov"
+TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+ANNUAL_FORMS = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
+ORIGINAL_ANNUAL = ("10-K", "20-F", "40-F")
+_ACC = re.compile(r"^\d{10}-\d{2}-\d{6}$")
+_DOC = re.compile(r"^[\w.\-]+$")
+_HEAVY = threading.Semaphore(1)   # one big filing in memory at a time: this runs on small, shared machines
+
+
+# ---------------------------------------------------------------- finding the company
+def _tickers():
+    def run():
+        d = json.loads(engine._sec_get(TICKERS_URL))
+        return {str(r["ticker"]).upper(): (int(r["cik_str"]), str(r["title"])) for r in d.values()}
+    return engine.cached("sec:tickers", 86400, run)
+
+
+def lookup(symbol):
+    """(cik, name) for a US-listed ticker, or None (not US-listed: other markets have no automatic filings here)."""
+    s = (symbol or "").strip().upper()
+    if not engine.SYM_RE.match(s):
+        raise ValueError("bad symbol")
+    return _tickers().get(s.replace(".", "-"))
+
+
+def _sec_error(e):
+    if isinstance(e, urllib.error.HTTPError):
+        return ValueError(f"The SEC did not answer (HTTP {e.code}). Try again in a minute.")
+    return e
+
+
+def _submissions(cik):
+    return engine.cached(f"sec:sub:{cik}", 900, lambda: json.loads(
+        engine._sec_get(f"{DATA}/submissions/CIK{cik:010d}.json", max_bytes=8_000_000, timeout=25)))
+
+
+def _recent(sub):
+    r = sub.get("filings", {}).get("recent", {})
+    n = len(r.get("accessionNumber", []))
+    keys = ("accessionNumber", "filingDate", "reportDate", "form", "primaryDocument", "items")
+    return [{k: (r.get(k) or [""] * n)[i] for k in keys} for i in range(n)]
+
+
+def _doc_url(cik, row):
+    acc, doc = row["accessionNumber"], row["primaryDocument"]
+    if not _ACC.match(acc) or not _DOC.match(doc or ""):
+        raise ValueError("unexpected filing identifier")
+    return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace('-', '')}/{doc}"
+
+
+def _index_url(cik, row):
+    acc = row["accessionNumber"]
+    if not _ACC.match(acc):
+        raise ValueError("unexpected filing identifier")
+    return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace('-', '')}/{acc}-index.htm"
+
+
+def _epoch(day):
+    try:
+        return calendar.timegm(time.strptime(day, "%Y-%m-%d"))
+    except (TypeError, ValueError):
+        return 0
+
+
+# ---------------------------------------------------------------- latest developments (8-K)
+# Item numbers are the SEC's own. The wording is ours: what it means to someone who has never read an 8-K.
+ITEMS = {
+    "1.01": ("Signed a major agreement", "info"), "1.02": ("Ended a major agreement", "warn"),
+    "1.03": ("Bankruptcy or receivership", "bad"), "1.04": ("Mine safety violation", "warn"),
+    "1.05": ("Reported a cybersecurity incident", "warn"),
+    "2.01": ("Completed buying or selling a business or assets", "info"),
+    "2.02": ("Published results (an earnings release)", "info"), "2.03": ("Took on new debt", "info"),
+    "2.04": ("Debt may be called in early (a default trigger)", "bad"),
+    "2.05": ("Announced restructuring or job cuts, with costs", "warn"),
+    "2.06": ("Wrote down the value of assets (impairment)", "warn"),
+    "3.01": ("Told by its exchange it may lose its listing", "bad"),
+    "3.02": ("Sold unregistered shares (can dilute owners)", "warn"), "3.03": ("Changed the rights of shareholders", "info"),
+    "4.01": ("Changed its auditor", "warn"),
+    "4.02": ("Said past financial statements should not be relied on (restatement)", "bad"),
+    "5.01": ("Change in who controls the company", "warn"),
+    "5.02": ("Executive or director left, or was appointed", "warn"), "5.03": ("Changed its bylaws", "info"),
+    "5.07": ("Shareholder vote results", "info"), "7.01": ("Shared a presentation or update (Regulation FD)", "info"),
+    "8.01": ("Shared other news it chose to disclose", "info"),
+}
+_TONE_RANK = {"info": 0, "warn": 1, "bad": 2}
+
+
+def developments(rows, cik, now=None, days=180, limit=12):
+    now = now or time.time()
+    out = []
+    for r in rows:
+        form = r["form"]
+        periodic = form in ("10-K", "10-Q", "20-F", "40-F")
+        if form not in ("8-K", "8-K/A", "6-K") and not periodic:
+            continue
+        ts = _epoch(r["filingDate"])
+        if not ts or now - ts > days * 86400:
+            continue
+        items = []
+        if periodic:
+            kind = {"10-K": "annual report", "20-F": "annual report", "40-F": "annual report", "10-Q": "quarterly report"}[form]
+            items = [{"code": "", "label": f"Filed its {kind}", "tone": "info"}]
+        else:
+            for code in (c.strip() for c in (r["items"] or "").split(",")):
+                if not code or code == "9.01":
+                    continue
+                label, tone = ITEMS.get(code, (f"Other event (item {code})", "info"))
+                items.append({"code": code, "label": label, "tone": tone})
+            if not items:
+                items = [{"code": "", "label": "Company announcement" if form != "6-K" else "Update from a foreign company", "tone": "info"}]
+        out.append({"date": r["filingDate"], "ts": ts, "form": form, "items": items,
+                    "tone": max((i["tone"] for i in items), key=_TONE_RANK.get), "url": _index_url(cik, r)})
+    return out[:limit]
+
+
+# ---------------------------------------------------------------- the numbers (SEC structured data)
+FLOW = {
+    "revenue": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax", "Revenue"],
+    "gross_profit": ["GrossProfit"],
+    "operating_income": ["OperatingIncomeLoss", "ProfitLossFromOperatingActivities"],
+    "net_income": ["NetIncomeLoss", "ProfitLoss", "ProfitLossAttributableToOwnersOfParent"],
+    "eps": ["EarningsPerShareDiluted", "DilutedEarningsLossPerShare", "EarningsPerShareBasic"],
+    "cfo": ["NetCashProvidedByUsedInOperatingActivities", "CashFlowsFromUsedInOperatingActivities"],
+    "capex": ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets",
+              "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"],
+}
+STOCK = {
+    "assets": ["Assets"], "liabilities": ["Liabilities"],
+    "equity": ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "Equity"],
+    "cash": ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalents"],
+    "debt": ["LongTermDebt", "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"],
+}
+
+
+def _span(start, end):
+    try:
+        return (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days
+    except ValueError:
+        return 0
+
+
+def _series(facts, names, flow):
+    """The best yearly series among the names a company might have used: freshest, then longest."""
+    best = None
+    for tax in ("us-gaap", "ifrs-full"):
+        for name in names:
+            node = facts.get(tax, {}).get(name)
+            for unit, entries in ((node or {}).get("units") or {}).items():
+                pts = {}
+                for e in entries:
+                    end = e.get("end")
+                    if e.get("form") not in ANNUAL_FORMS or not end or "val" not in e:
+                        continue
+                    if flow and not 340 <= _span(e.get("start") or end, end) <= 380:
+                        continue
+                    cur = pts.get(end)
+                    if cur is None or (e.get("filed") or "") >= cur[1]:
+                        pts[end] = (e["val"], e.get("filed") or "")
+                if pts:
+                    cand = (max(pts), len(pts), unit, {k: v[0] for k, v in pts.items()})
+                    if best is None or cand[:2] > best[:2]:
+                        best = cand
+    return best
+
+
+def _near(day, table, tol=12):
+    if day in table:
+        return table[day]
+    d = _epoch(day)
+    for k, v in table.items():
+        if abs(_epoch(k) - d) <= tol * 86400:
+            return v
+    return None
+
+
+def financials(facts, years=5):
+    series = {k: _series(facts, n, True) for k, n in FLOW.items()}
+    series.update({k: _series(facts, n, False) for k, n in STOCK.items()})
+    anchor = series.get("revenue") or series.get("net_income")
+    if not anchor:
+        return None
+    ends = sorted(anchor[3])[-years:]
+    rows = {k: [_near(e, s[3]) for e in ends] for k, s in series.items() if s}
+    if "cfo" in rows:
+        rows["fcf"] = [None if c is None else c - (x or 0) for c, x in zip(rows["cfo"], rows.get("capex", [None] * len(ends)))]
+    return _finish(ends, rows, (anchor[2] or "USD").split("/")[0])
+
+
+def _finish(ends, rows, cur):
+    """Margins, debt against equity and the plain-English read: the same for every source of numbers."""
+    def per(a, b):
+        return [round(x / y, 4) if x is not None and y not in (None, 0) else None for x, y in zip(rows.get(a, [None] * len(ends)), rows.get(b, [None] * len(ends)))]
+    rows["gross_margin"] = per("gross_profit", "revenue")
+    rows["operating_margin"] = per("operating_income", "revenue")
+    rows["net_margin"] = per("net_income", "revenue")
+    rows["debt_to_equity"] = per("debt", "equity")
+    out = {"currency": cur, "years": ends, "rows": rows}
+    out["read"] = read(out)
+    return out
+
+
+# ---------------------------------------------------------------- numbers for every other market (Yahoo Finance)
+# Outside the US there is no free, official, automatic feed of company filings that permits programs to read it
+# (SGX, for one, keeps its announcements API behind a token meant for its own website). Yahoo's statement data is
+# unofficial but is what the rest of this app already leans on, and it covers the numbers for any market.
+YF_TS = "https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/"
+_YF = {"revenue": "annualTotalRevenue", "gross_profit": "annualGrossProfit", "operating_income": "annualOperatingIncome",
+       "net_income": "annualNetIncome", "cfo": "annualOperatingCashFlow", "fcf": "annualFreeCashFlow", "assets": "annualTotalAssets",
+       "equity": "annualStockholdersEquity", "cash": "annualCashAndCashEquivalents", "debt": "annualLongTermDebt",
+       "total_debt": "annualTotalDebt", "eps": "annualBasicEPS"}
+
+
+def yahoo_financials(symbol, years=5):
+    url = YF_TS + urllib.parse.quote(symbol) + "?type=" + ",".join(_YF.values()) + "&merge=false&period1=1300000000&period2=" + str(int(time.time()) + 86400)
+    data = json.loads(engine.http_get(url, timeout=20, max_bytes=2_000_000)[0])
+    got, cur = {}, None
+    for r in data.get("timeseries", {}).get("result") or []:
+        typ = (r.get("meta", {}).get("type") or [""])[0]
+        for key, name in _YF.items():
+            if name == typ:
+                pts = {p["asOfDate"]: p["reportedValue"]["raw"] for p in (r.get(typ) or []) if p and p.get("reportedValue")}
+                if pts:
+                    got[key] = pts
+                    cur = cur or next((p.get("currencyCode") for p in r[typ] if p and p.get("currencyCode")), None)
+    anchor = got.get("revenue") or got.get("net_income")
+    if not anchor:
+        return None
+    ends = sorted(anchor)[-years:]
+    rows = {k: [_near(e, v) for e in ends] for k, v in got.items() if k != "total_debt"}
+    if "debt" not in rows and "total_debt" in got:      # many companies only report total borrowings
+        rows["debt"] = [_near(e, got["total_debt"]) for e in ends]
+    out = _finish(ends, rows, cur or "USD")
+    out["source"] = "Yahoo Finance"
+    return out
+
+
+_SYMS = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "CAD": "C$", "AUD": "A$", "CHF": "CHF ", "HKD": "HK$", "SGD": "S$", "INR": "₹"}
+
+
+def money(v, cur="USD"):
+    s = _SYMS.get(cur, cur + " ")
+    a = abs(v)
+    t = f"{a / 1e12:.1f}T" if a >= 1e12 else f"{a / 1e9:.1f}B" if a >= 1e9 else f"{a / 1e6:.0f}M" if a >= 1e6 else f"{a:,.0f}"
+    return ("-" if v < 0 else "") + s + t
+
+
+def read(f):
+    """A short, rule-based read of the numbers. Every line states its own cause; none of it is advice."""
+    R, n, cur = f["rows"], len(f["years"]), f["currency"]
+    out = []
+
+    def g(k, back=0):
+        v = R.get(k)
+        return v[n - 1 - back] if v and n - 1 - back >= 0 else None
+    rev, prev = g("revenue"), g("revenue", 1)
+    if rev is not None and prev:
+        growth = rev / prev - 1
+        first = R["revenue"][0]
+        cagr = f" (about {((rev / first) ** (1 / (n - 1)) - 1) * 100:.0f}% a year over {n - 1} years)" if n >= 4 and first and first > 0 and rev > 0 else ""
+        tone = "good" if growth > 0.05 else "warn" if growth < 0 else "info"
+        out.append({"tone": tone, "text": f"Revenue {'grew' if growth >= 0 else 'fell'} {abs(growth) * 100:.1f}% to {money(rev, cur)}{cagr}."})
+    ni, nm, pnm = g("net_income"), g("net_margin"), g("net_margin", 1)
+    if ni is not None and ni < 0:
+        out.append({"tone": "bad", "text": f"The company lost money last year: a net loss of {money(-ni, cur)}."})
+    elif nm is not None and pnm is not None:
+        d = (nm - pnm) * 100
+        tone = "good" if d > 1 else "warn" if d < -2 else "info"
+        out.append({"tone": tone, "text": f"Net margin (profit per dollar of sales) was {nm * 100:.1f}%, {'up' if d >= 0 else 'down'} from {pnm * 100:.1f}%."})
+    assets = g("assets")
+    if assets and rev and assets / rev > 12:
+        # A bank or insurer: its "debt", "cash" and "operating cash flow" are the business itself (deposits, loans,
+        # premiums), so the usual cash and borrowing rules would say something false.
+        out.append({"tone": "info", "text": "This looks like a bank or insurer, where cash flow, debt and cash mean something different from a normal company. Judge it on profit, growth and the capital figures in its own annual report."})
+        return out
+    cfo = g("cfo")
+    if cfo is not None and ni and ni > 0:
+        r = cfo / ni
+        if r < 0.7:
+            out.append({"tone": "warn", "text": f"Only about {r * 100:.0f} cents of each dollar of reported profit arrived as cash from operations, so the profit may not be as solid as it looks."})
+        elif r >= 1:
+            out.append({"tone": "good", "text": f"Profit is backed by cash: operating cash flow was {r:.1f} times net income."})
+    fcf = g("fcf")
+    if fcf is not None and fcf < 0:
+        out.append({"tone": "bad" if (ni or 0) <= 0 else "warn", "text": f"Free cash flow was negative ({money(fcf, cur)}): it spent more than its operations brought in."})
+    eq, debt, cash = g("equity"), g("debt"), g("cash")
+    if eq is not None and eq < 0:
+        out.append({"tone": "warn", "text": "Shareholders' equity is negative: on paper the company owes more than it owns. That is common after big buybacks, but it leaves little cushion."})
+    elif debt is not None and eq:
+        de = debt / eq
+        if de > 2:
+            out.append({"tone": "warn", "text": f"Long-term debt is {de:.1f} times shareholders' equity, which is heavily borrowed."})
+    if cash is not None and debt is not None and debt > 0 and cash > debt:
+        out.append({"tone": "good", "text": f"It holds more cash ({money(cash, cur)}) than long-term debt ({money(debt, cur)})."})
+    pdebt = g("debt", 1)
+    if debt and pdebt and rev and prev and debt / pdebt - 1 > 0.3 and debt / pdebt > rev / prev:
+        out.append({"tone": "warn", "text": f"Long-term debt rose {(debt / pdebt - 1) * 100:.0f}%, much faster than sales."})
+    return out
+
+
+def _financials_for(cik):
+    def run():
+        with _HEAVY:
+            raw = engine._sec_get(f"{DATA}/api/xbrl/companyfacts/CIK{cik:010d}.json", max_bytes=40_000_000, timeout=45)
+            return financials(json.loads(raw).get("facts", {}))
+    return engine.cached(f"sec:fin:{cik}", 43200, run)
+
+
+# ---------------------------------------------------------------- the quick brief
+def _filing_ref(cik, row):
+    return None if not row else {"form": row["form"], "filed": row["filingDate"], "period": row["reportDate"], "url": _doc_url(cik, row)}
+
+
+# Yahoo's exchange suffixes. A single trailing letter (BRK.B) is a share class, not an exchange.
+_EXCHANGE = re.compile(r"\.([A-Z]{2,3}|[LTV])$")
+_SUFFIX_MARKET = {"SI": "sg", "HK": "hk", "L": "uk", "T": "jp", "NS": "in", "BO": "in", "AX": "au", "TO": "ca", "V": "ca",
+                  "SS": "cn", "SZ": "cn", "DE": "eu", "PA": "eu", "AS": "eu", "MI": "eu", "MC": "eu", "SW": "eu",
+                  "ST": "eu", "CO": "eu", "OL": "eu", "HE": "eu", "BR": "eu", "LS": "eu", "VI": "eu", "IR": "eu"}
+
+
+def _clean_symbol(symbol):
+    s = (symbol or "").strip().upper()
+    if not engine.SYM_RE.match(s):
+        raise ValueError("bad symbol")
+    return s
+
+
+def _other_market(s):
+    """Not something the SEC covers: numbers only, from Yahoo, and links to the official portal for the rest."""
+    m = _EXCHANGE.search(s)
+    out = {"configured": True, "supported": False, "symbol": s, "market": _SUFFIX_MARKET.get(m.group(1)) if m else None}
+    try:
+        out["financials"] = engine.cached("yf:fin:" + s, 43200, lambda: yahoo_financials(s))
+    except Exception as e:
+        out["financials_error"] = type(e).__name__
+    return out
+
+
+def get_company(symbol):
+    s = _clean_symbol(symbol)
+    if _EXCHANGE.search(s):
+        return _other_market(s)          # needs no SEC identity: Yahoo only
+    if not engine.sec_agent():
+        return {"configured": False}
+    try:
+        hit = lookup(s)
+        if not hit:
+            return _other_market(s)
+        cik, name = hit
+        sub = _submissions(cik)
+        rows = _recent(sub)
+        out = {"configured": True, "supported": True, "symbol": s, "name": sub.get("name") or name, "cik": cik,
+               "edgar": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=&dateb=&owner=include&count=40",
+               "developments": developments(rows, cik),
+               "annual": _filing_ref(cik, next((r for r in rows if r["form"] in ORIGINAL_ANNUAL), None)),
+               "quarterly": _filing_ref(cik, next((r for r in rows if r["form"] == "10-Q"), None))}
+        try:
+            out["financials"] = _financials_for(cik)
+        except Exception as e:
+            out["financials_error"] = type(_sec_error(e)).__name__
+        return out
+    except urllib.error.HTTPError as e:
+        raise _sec_error(e)
+
+
+# ---------------------------------------------------------------- reading the annual report itself
+class _Lines(HTMLParser):
+    """HTML to lines of text. Skips scripts and the hidden XBRL header every modern filing starts with."""
+    BLOCK = {"p", "div", "br", "tr", "li", "table", "section", "center", "h1", "h2", "h3", "h4", "h5", "h6"}
+    SKIP = {"script", "style", "head", "title", "ix:header"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.lines, self.buf, self.skip = [], [], 0
+
+    def _flush(self):
+        t = " ".join("".join(self.buf).split())
+        self.buf = []
+        if t:
+            self.lines.append(t)
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP:
+            self.skip += 1
+        elif tag in self.BLOCK:
+            self._flush()
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP:
+            self.skip = max(0, self.skip - 1)
+        elif tag in self.BLOCK:
+            self._flush()
+        elif tag in ("td", "th"):
+            self.buf.append(" ")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.buf.append(data)
+
+
+_ITEM_ONLY = re.compile(r"^item\s*\d+[a-c]?[.:]?$", re.I)
+
+
+def doc_lines(html_text):
+    p = _Lines()
+    p.feed(html_text)
+    p._flush()
+    out, i = [], 0
+    while i < len(p.lines):   # some filings put "Item 1A." and "Risk Factors" on separate lines
+        if _ITEM_ONLY.match(p.lines[i]) and i + 1 < len(p.lines):
+            out.append(p.lines[i] + " " + p.lines[i + 1])
+            i += 2
+        else:
+            out.append(p.lines[i])
+            i += 1
+    return out
+
+
+# Some filings (Microsoft's) repeat an "Item 1A" label in front of almost every paragraph, so a heading can read
+# "Item 1A ITEM 1A. RISK FACTORS": the (?:item ...)+ group allows the label to appear more than once.
+_SECTIONS = {
+    "10-K": {"risk": (r"^(?:item\s*1a\b[\s.:\-–—]*)+risk\s+factors", r"^item\s*(1b|1c|2)\b"),
+             "mdna": (r"^(?:item\s*7\b[\s.:\-–—]*)+management", r"^item\s*(7a|8)\b")},
+    "20-F": {"risk": (r"^(item\s*3\.?\s*)?(d\.?\s*)?risk\s+factors\s*$", r"^item\s*4\b"),
+             "mdna": (r"^item\s*5\b[\s.:\-–—]*operating", r"^item\s*6\b")},
+}
+
+
+_LABEL = re.compile(r"^item\s*\d+[a-c]?(?![\w.:,])\s*", re.I)
+
+
+def strip_labels(lines):
+    """Drop the repeated 'Item 1A ' label some filings put in front of body paragraphs (headings keep theirs:
+    they have a period or colon after the number)."""
+    return [_LABEL.sub("", ln) for ln in lines]
+
+
+def section(lines, kind, form="10-K"):
+    """The longest stretch between a matching heading and the next item: the table of contents also matches,
+    but it is short, so the real section wins. Empty when nothing plausible is found."""
+    cfg = _SECTIONS["20-F" if form.startswith(("20-F", "40-F")) else "10-K"][kind]
+    srx, erx = re.compile(cfg[0], re.I), re.compile(cfg[1], re.I)
+    best = ""
+    for i, ln in enumerate(lines):
+        if not srx.search(ln[:200]):
+            continue
+        j = next((k for k in range(i + 1, len(lines)) if erx.search(lines[k][:80])), None)
+        if j is not None:
+            body = "\n".join(strip_labels(lines[i + 1:j]))
+            if len(body) > len(best):
+                best = body
+    return best if len(best) >= 2000 else ""
+
+
+# not after abbreviations: "U.S. District Court" and "Apple Inc. announced" are not sentence ends
+_SENT = re.compile(r"(?<!\bU\.S\.)(?<!\bInc\.)(?<!\bCo\.)(?<!\bCorp\.)(?<!\bLtd\.)(?<!\bNo\.)(?<!\bvs\.)(?<!\bSt\.)(?<!\bDr\.)(?<!\bMr\.)(?<=[.!?])\s+(?=[A-Z\"“(])")
+
+
+def sentences(text):
+    out = []
+    for line in text.split("\n"):
+        for s in _SENT.split(line):
+            s = s.strip().lstrip("•·▪●‣◦ ")   # bullet glyphs the HTML puts in front of list items
+            if s:
+                out.append(s)
+    return out
+
+
+_HEDGE = re.compile(r"\b(could|may|might|would|if|potential|possible|risk (that|of)|from time to time|no assurance|cannot assure|unable to predict|"
+                    r"(is|are) subject to|subject to the|exposed to|vulnerab\w+|susceptible|we face|faces|cannot|assurances?|"
+                    r"our policy|incident response|response plan|oversight|oversee\w*|audit committee|governance|"
+                    r"often|following periods of)\b", re.I)
+# A sentence saying the problem did NOT happen, an auditor describing what it checked for, or an accounting
+# policy ("carried at cost, less any recognized impairment") is not a red flag.
+_NEG = re.compile(r"\b(did not|do not|does not|has not|have not|had no|there (were|are|was) no|no|not)\s+(\w+\s+){0,3}(recogni[sz]e|record|incur|identify|identified|material weakness|impairment|restate)\w*"
+                  r"|not identified|no material weakness|assess(ing)? the risk|whether a material weakness|material weakness(es)? (exists?|that exist)|reform act"
+                  r"|immaterial|less (any )?(accumulated |recogni[sz]ed )|accumulated impairment|net of impairment"
+                  r"|\bno (such )?(class actions?|lawsuits?|investigations?|subpoenas?|proceedings?)|not (currently )?(a party|subject to|aware of)", re.I)
+# (id, label, tone, phrase, optional "it really happened" wording). Flags whose phrase is mostly boilerplate
+# (every report says it could suffer a cyber attack) only count as stated when the sentence also describes
+# something that did happen. Tuned against real 10-Ks: "ongoing concern over climate change" is not going
+# concern, and "we did not recognize any impairment" is not a write-down.
+FLAGS = [
+    ("going", "Doubt it can keep going (going concern)", "bad", r"substantial doubt[^.]{0,100}going concern|(?<![a-z])going concern", None),
+    ("weak", "Weakness in its financial controls", "bad", r"material weakness", None),
+    ("restate", "Restated past results", "bad", r"restate(d|ment)[^.]{0,80}(previously issued|prior period|financial statements)|non-reliance", None),
+    ("delist", "Exchange listing at risk", "bad", r"delisting (notice|determination)|notice from (the )?(nasdaq|nyse|exchange)|deficiency notice|minimum bid price|continued listing (standard|requirement)|(nasdaq|nyse)[^.]{0,80}(deficien|non-?complian)", None),
+    ("auditor", "Changed or lost its auditor", "warn", r"(dismissed|resigned|terminated|replaced)[^.]{0,60}(independent registered public accounting firm|auditors?)|(independent registered public accounting firm|auditors?)[^.]{0,40}(was|were|has been|have been) (dismissed|replaced)|resignation of [^.]{0,40}(auditor|accounting firm)", None),
+    ("probe", "Government or regulator investigation", "warn", r"subpoena|wells notice|formal investigation|civil investigative demand|sec (investigation|inquiry)",
+     r"\b(received|issued|opened|commenced|initiated|announced|investigating)\b"),
+    ("covenant", "Trouble with its loan terms (covenants)", "warn", r"(violat|breach|not in compliance|waiver)\w*[^.]{0,80}covenant|covenant[^.]{0,80}(violat|breach|waiver)",
+     r"\b(credit|loans?|debt|lenders?|notes|indenture|facility|financial covenants?)\b"),
+    ("impair", "Wrote down the value of assets", "warn", r"(recorded|recognized|recognised|incurred|took)[^.]{0,60}impairment|impairment (charges?|losses?)[^.]{0,40}\$\s?[\d.,]+",
+     r"\$\s?[\d.,]+|\b(million|billion)\b|\bin (fiscal )?(19|20)\d\d\b|during (the )?(year|quarter|fiscal|three|six|nine|twelve)|fourth quarter"),
+    ("cyber", "Cybersecurity incident", "warn", r"(cybersecurity|cyber) (incident|attack)|data breach|ransomware",
+     r"\b(experienced|suffered|detected|discovered|identified|was (the )?(subject|victim|target)|were (the )?(subjects?|victims|targets))\b"),
+    ("suit", "Class action or major lawsuit", "info", r"class action|securities litigation", r"\b(was|were) filed|putative|filed (a|an|against)|lead plaintiff|consolidated"),
+    ("cuts", "Job cuts or restructuring", "info", r"reduction in (force|workforce)|restructuring (plan|charge)|layoffs", None),
+]
+_FLAG_RX = [(i, lab, tone, re.compile(rx, re.I), re.compile(need, re.I) if need else None) for i, lab, tone, rx, need in FLAGS]
+_CONC = re.compile(r"(\d{2})% of (?:our |the company'?s |its )?(?:total |net |consolidated )?(?:net )?(?:revenues?|sales)", re.I)
+
+
+def scan_flags(text):
+    """Red-flag phrases, split into what the report states and what it only mentions as a possible risk. Nearly
+    every report mentions going concern or a breach *hypothetically*; those are shown, but toned down."""
+    found = {}
+    for s in sentences(text):
+        if not 40 <= len(s) <= 700 or re.match(r"^\(\w{1,2}\)", s):   # a table footnote marker, not prose
+            continue
+        if _NEG.search(s):
+            continue
+        for fid, label, tone, rx, need in _FLAG_RX:
+            if rx.search(s):
+                hedged = bool(_HEDGE.search(s)) or bool(need and not need.search(s))
+                cur = found.get(fid)
+                if cur is None or (cur["hedged"] and not hedged):
+                    found[fid] = {"id": fid, "label": label, "tone": "info" if hedged and tone != "info" else tone,
+                                  "hedged": hedged, "text": s[:320] + ("…" if len(s) > 320 else "")}
+        m = _CONC.search(s)
+        # "customers representing at least 10% of revenue" is how a table defines who to list, not a finding
+        if m and int(m.group(1)) >= 10 and "customer" in s.lower() and "conc" not in found \
+                and not re.search(r"\b(at least|more than|exceed\w*|in excess of|greater than|over)\s+\d+%", s, re.I):
+            found["conc"] = {"id": "conc", "label": f"Depends on a few big customers ({m.group(1)}% of sales from one)",
+                             "tone": "warn", "hedged": False, "text": s[:320] + ("…" if len(s) > 320 else "")}
+    order = {"bad": 0, "warn": 1, "info": 2}
+    return sorted(found.values(), key=lambda f: (order[f["tone"]], f["hedged"]))
+
+
+_DRIVER = re.compile(r"(increase|decrease|decline|grew|growth|higher|lower|rose|fell)", re.I)
+_CAUSE = re.compile(r"(due to|driven by|primarily|attributable|as a result of|resulted from|mainly)", re.I)
+_BIG = re.compile(r"(revenue|net sales|gross margin|operating income|operating expenses|net income|cost of)", re.I)
+
+
+def drivers(mdna, limit=5):
+    """Sentences where management itself says what moved a number, and why. Ones with a figure come first;
+    plain-words ones count only when they are about the big lines (sales, margins, profit, costs), because
+    some companies explain their year without quoting a single percentage."""
+    scored = []
+    for s in sentences(mdna):
+        if not 70 <= len(s) <= 420 or not _DRIVER.search(s) or not _CAUSE.search(s):
+            continue
+        has_num = bool(re.search(r"\d+(\.\d+)?%|\$\s?[\d.,]+\s?(million|billion)", s))
+        if has_num or _BIG.search(s):
+            scored.append((0 if has_num and _BIG.search(s) else 1 if has_num else 2, len(scored), s))
+    scored.sort()
+    return [s for _, _, s in scored[:limit]]
+
+
+def _shingles(text, n=4):
+    w = re.findall(r"[a-z0-9']+", text.lower())
+    return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
+
+
+def new_risks(cur, prior, limit=6):
+    """Risk sentences whose wording barely appears in last year's report. It is a rewording detector, so it
+    over-reports a little; it points at where to look, it does not prove a new risk."""
+    if not cur or not prior:
+        return None
+    seen = _shingles(prior)
+    out = []
+    for s in sentences(cur):
+        words = len(s.split())
+        if not 14 <= words <= 90 or not re.search(r"\b(adverse|harm|loss|could|may|risk)\b", s, re.I):
+            continue
+        if re.match(r"(However|These|This|Further|Moreover|In addition|For example|Such)\b", s) or "risk factors are not" in s:
+            continue   # connective or boilerplate openings: they point at nothing specific
+        if not (s[0].isupper() or s[0].isdigit()):
+            continue   # starts mid-sentence: the paragraph broke across lines, so this is half a sentence
+        sh = _shingles(s)
+        if sh and len(sh & seen) / len(sh) < 0.15:
+            out.append((len(sh & seen) / len(sh), s))
+    out.sort(key=lambda t: t[0])
+    return [s[:300] + ("…" if len(s) > 300 else "") for _, s in out[:limit]]
+
+
+def _decode(raw):
+    """Filings are UTF-8 or, in older templates, Windows-1252. Guessing UTF-8 for the latter turns every
+    apostrophe into a replacement mark in the quotes we show."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", "replace")
+
+
+def analyze(cik, cur, prior):
+    html_text = _decode(engine._sec_get(_doc_url(cik, cur), max_bytes=15_000_000, timeout=50))
+    lines = doc_lines(html_text)
+    del html_text
+    risk, mdna = section(lines, "risk", cur["form"]), section(lines, "mdna", cur["form"])
+    out = {"available": True, "form": cur["form"], "filed": cur["filingDate"], "period": cur["reportDate"],
+           "url": _doc_url(cik, cur), "flags": scan_flags("\n".join(strip_labels(lines))), "drivers": drivers(mdna),
+           "sections": {"risk": bool(risk), "mdna": bool(mdna)}, "words": sum(len(x.split()) for x in lines),
+           "prior": None, "new_risks": None}
+    del lines
+    if prior and risk:
+        try:
+            plines = doc_lines(_decode(engine._sec_get(_doc_url(cik, prior), max_bytes=15_000_000, timeout=50)))
+            out["prior"] = {"form": prior["form"], "filed": prior["filingDate"], "period": prior["reportDate"]}
+            out["new_risks"] = new_risks(risk, section(plines, "risk", prior["form"]))
+        except Exception:
+            pass   # last year's report is a bonus: failing to read it must not hide this year's
+    return out
+
+
+MAX_PASTE = 400_000
+
+
+def _unwrap(text):
+    """Text copied out of a PDF is hard-wrapped every ~80 characters, which would cut every sentence in half.
+    Join lines unless the previous one ended a sentence; blank lines stay as paragraph breaks."""
+    out, buf = [], ""
+    for raw in text.replace("\r", "").split("\n"):
+        line = raw.strip()
+        if not line:
+            if buf:
+                out.append(buf)
+            buf = ""
+        elif buf and not re.search(r"[.!?:”\"]$", buf):
+            buf += " " + line
+        else:
+            if buf:
+                out.append(buf)
+            buf = line
+    if buf:
+        out.append(buf)
+    return out
+
+
+def analyze_text(text):
+    """The same red-flag and 'why it moved' reading, over text a person pasted from an annual report. This is how
+    companies on exchanges with no free filings feed (Singapore, Hong Kong, London, ...) get read: the person
+    supplies the text, so nothing here fetches anything."""
+    text = (text or "").strip()[:MAX_PASTE]
+    if len(text) < 500:
+        raise ValueError("Paste a few paragraphs of the report first, for example its Risk Factors or Management Discussion section.")
+    lines = _unwrap(text)
+    joined = "\n".join(lines)
+    return {"available": True, "pasted": True, "words": len(joined.split()), "flags": scan_flags(joined),
+            "drivers": drivers(joined), "sections": {"risk": None, "mdna": None}, "prior": None, "new_risks": None}
+
+
+def get_annual_report(symbol):
+    s = _clean_symbol(symbol)
+    if _EXCHANGE.search(s):
+        return {"configured": True, "supported": False, "symbol": s}
+    if not engine.sec_agent():
+        return {"configured": False}
+    try:
+        hit = lookup(s)
+        if not hit:
+            return {"configured": True, "supported": False, "symbol": s}
+        cik, _ = hit
+        annual = [r for r in _recent(_submissions(cik)) if r["form"] in ORIGINAL_ANNUAL and r["primaryDocument"]]
+        if not annual:
+            return {"configured": True, "supported": True, "available": False,
+                    "reason": "No annual report in the SEC's recent filings for this company."}
+        cur = annual[0]
+        prior = next((r for r in annual[1:] if r["reportDate"] != cur["reportDate"]), None)
+
+        def run():
+            with _HEAVY:
+                return analyze(cik, cur, prior)
+        res = engine.cached(f"annual:{cik}:{cur['accessionNumber']}", 7 * 86400, run)
+        return {"configured": True, "supported": True, "symbol": s, **res}
+    except urllib.error.HTTPError as e:
+        raise _sec_error(e)
