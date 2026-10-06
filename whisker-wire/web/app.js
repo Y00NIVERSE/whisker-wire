@@ -775,7 +775,7 @@ function storyEl(s, isNew) {
           h("span", { class: "read-t", text: "Read here" }), h("span", { class: "read-ic", "aria-hidden": "true", text: "→" })),
         h("button", { class: "ext", onclick: () => askAbout(`What does this mean for the stock: ${s.title}`) }, "Ask Tick"),
         h("button", { class: "more-btn", "aria-label": "Show more about this story", onclick: (e) => { const on = e.target.closest(".story").classList.toggle("is-open"); e.target.textContent = on ? "Less" : "More"; } }, "More"),
-        usSym(s.tickers[0]) && h("button", { class: "ext", title: "Five years of numbers, red flags in the annual report, and the latest SEC filings", onclick: () => openCompany(s.tickers[0]) }, "Company brief"),
+        coSym(s.tickers[0]) && h("button", { class: "ext", title: "Five years of numbers, red flags in the annual report, and the latest filings", onclick: () => openCompany(s.tickers[0]) }, "Company brief"),
         sec && h("a", { class: "ext", href: sec.url, title: "The company's own filings, straight from the SEC" }, sec.label, extIcon()),
         h("a", { class: "ext", href: s.link, title: isGoogle(s.link) ? "Opens through Google News, which then forwards you to the publisher" : "Leaves Whisker Wire and opens the publisher's own site" }, isGoogle(s.link) ? "Original (via Google News)" : "Original", extIcon()),
         h("a", { class: "ext", href: "https://web.archive.org/web/2/" + s.link, title: "Leaves Whisker Wire and opens an archived copy" }, "Archive copy", extIcon()),
@@ -1034,7 +1034,7 @@ function pickEl(p) {
           } catch (err) { fill(detail, h("p", { class: "small", text: "Could not load: " + err.message })); }
         }
       } }, "Chart and news"),
-      usSym(p.symbol) && h("button", { onclick: () => openCompany(p.symbol), title: "Annual-report numbers, red flags and latest SEC filings" }, "Company brief"),
+      coSym(p.symbol) && h("button", { onclick: () => openCompany(p.symbol), title: "Annual-report numbers, red flags and latest filings" }, "Company brief"),
       h("button", { onclick: () => { state.ticker = p.symbol; state.filter = "all"; state.page.wire = 1; setView("wire"); renderWire(); } }, "Filter the wire"),
       h("button", { onclick: () => { state.watch.add(p.symbol); commitWatch(); flash(p.symbol + " added to your watchlist."); renderWire(); } }, "Watch")),
     detail);
@@ -1071,8 +1071,7 @@ function secSetup() {
     h("p", { class: "small", text: "Prefer to do it by hand? Create whisker-wire/sec_contact.txt containing one line: Your Name you@example.com" }));
 }
 
-function renderPortals(box) {
-  const m = marketInfo();
+function renderPortals(box, m = marketInfo()) {
   fill(box, h("div", { class: "portals" },
     h("h2", { class: "subhead", text: `Where ${m.name} companies file` }),
     h("p", { class: "small", text: "Whisker Wire reads US filings from the SEC automatically. For this market, the official announcements, including director and insider dealings, live at these sites. Open them to check any story at its source." }),
@@ -1128,8 +1127,8 @@ function renderFilings() {
 
 /* ------------------------------------------------------------ company brief: numbers, annual report, latest developments */
 const co = { sym: null, token: 0 };
-// The SEC only covers US-listed companies: a plain 1-5 letter ticker (BRK.B style classes allowed), on the US market.
-const usSym = (t) => state.market === "us" && /^[A-Z]{1,5}(\.[A-Z])?$/.test(t || "");
+// A US ticker (1-5 letters, BRK.B style classes allowed) on the US market, or any local-format ticker such as D05.SI or 0700.HK.
+const coSym = (t) => (state.market === "us" && /^[A-Z]{1,5}(\.[A-Z])?$/.test(t || "")) || /^[A-Z0-9]{1,6}\.[A-Z]{1,3}$/.test(t || "");
 
 function openCompany(sym) {
   sym = String(sym || "").trim().toUpperCase();
@@ -1156,7 +1155,7 @@ async function loadCompany(sym) {
   const my = ++co.token;
   co.sym = sym;
   const body = $("#company-body");
-  fill(body, h("p", { class: "small", text: `Looking up ${sym} on the SEC…` }));
+  fill(body, h("p", { class: "small", text: `Looking up ${sym}…` }));
   let c;
   try { c = await api("/api/company?symbol=" + encodeURIComponent(sym)); }
   catch (e) { if (my === co.token) fill(body, h("p", { class: "empty", text: e.message })); return; }
@@ -1172,10 +1171,7 @@ function coTop(c, sym) {
   if (!c.configured) return h("div", { class: "setup" }, h("h3", { text: "Company briefs are switched off here" }),
     h("p", { class: "small", text: state.hosted ? "They read SEC filings, which needs the site's owner to identify themselves to the SEC, and that is not set up yet. The wire and Value Radar work as normal."
       : "They read SEC filings, which the SEC asks you to identify yourself for. Turn that on in the Filings tab first (one step), then come back." }));
-  if (!c.supported) return h("div", { class: "co-sec" },
-    h("h2", { class: "subhead", text: sym }),
-    h("p", { class: "small", text: `${sym} is not a US-listed company the SEC covers, so there is nothing to read automatically. Annual reports and announcements for other markets are on the exchange's own site:` }),
-    (() => { const b = h("div"); renderPortals(b); return b; })());
+  if (!c.supported) return coOther(c, sym);
   return h("div", {},
     h("div", { class: "co-head" },
       h("h2", { text: c.name }), h("span", { class: "tk mono", text: c.symbol }),
@@ -1185,6 +1181,39 @@ function coTop(c, sym) {
     h("p", { class: "small", text: "What the company itself has just told the SEC, translated out of filing code. Filings are often earlier than the news, and always first-hand." }),
     coDev(c.developments || []),
     h("h2", { class: "subhead", text: "Inside the annual report" }), coAnnual(c));
+}
+
+// A company the SEC does not cover (Singapore, Hong Kong, London, ...): numbers from Yahoo, the exchange's own
+// announcement site for the rest, and a box to paste report text into. Outside the US there is no free official
+// feed that programs may read, so Tick says so instead of pretending.
+function coOther(c, sym) {
+  const mk = state.markets.find((m) => m.id === c.market) || marketInfo();
+  const portals = h("div");
+  renderPortals(portals, mk);
+  portals.querySelector("button.ghost")?.remove();          // "switch to US filings" makes no sense here
+  portals.querySelector(".subhead").textContent = `Latest developments: where ${mk.name} companies announce`;
+  portals.querySelector(".small").textContent = "No free official feed of announcements exists for this market that a program may read, so Tick cannot list them here. They are on the exchange's own site, and the news below picks up most of what matters.";
+  return h("div", {},
+    h("div", { class: "co-head" }, h("h2", { text: sym }), h("span", { class: "tk mono", text: mk.name })),
+    h("h2", { class: "subhead", text: "What the numbers say" }), coNumbers(c),
+    portals,
+    h("h2", { class: "subhead", text: "Inside the annual report" }), coPaste());
+}
+
+function coPaste() {
+  const box = h("div", { class: "co-annual" });
+  const ta = h("textarea", { id: "co-paste", rows: "7", placeholder: "Paste text from the annual report here: its Risk Factors, or its Management Discussion and Analysis…", "aria-label": "Annual report text" });
+  const out = h("div", { role: "status" });
+  const go = h("button", { class: "primary", type: "button", onclick: async () => {
+    go.disabled = true; fill(out, h("p", { class: "small", text: "Tick is reading…" }));
+    try { fill(out, renderAnnual(await postJson("/api/analyze-text", { text: ta.value }))); }
+    catch (e) { fill(out, h("p", { class: "empty", text: e.message })); }
+    go.disabled = false;
+  } }, "Scan this text");
+  box.append(
+    h("p", { class: "small", text: "Tick cannot fetch this company's annual report for you, but she can read what you give her. Open the report (usually a PDF on the company's investor page or the exchange's site), copy a section, and paste it here. She looks for red-flag phrases and for what management says moved the numbers. She reads words, not meaning: it shows where to look, not a verdict." }),
+    ta, h("div", { class: "chips" }, go), out);
+  return box;
 }
 
 function coNumbers(c) {
@@ -1200,7 +1229,9 @@ function coNumbers(c) {
         h("thead", {}, h("tr", {}, h("th", { scope: "col", text: f.currency }), f.years.map((y) => h("th", { scope: "col", text: "FY " + y.slice(0, 4) })))),
         h("tbody", {}, lines.map(([lab, k, kind]) => h("tr", {}, h("th", { scope: "row", text: lab }),
           R[k].map((v) => h("td", { class: kind === "m" && v < 0 ? "neg" : "", text: kind === "p" ? coPct(v) : coMoney(v, f.currency) }))))))),
-    h("p", { class: "fine", text: "From the structured data companies file with the SEC. Fiscal years end on different dates, so compare a company with itself, not with another one." }));
+    h("p", { class: "fine", text: f.source === "Yahoo Finance"
+      ? "From Yahoo Finance's statement data: unofficial, and it can be late or wrong, so check the company's own annual report before relying on it. Fiscal years end on different dates: compare a company with itself, not with another one."
+      : "From the structured data companies file with the SEC. Fiscal years end on different dates, so compare a company with itself, not with another one." }));
 }
 
 function coDev(list) {
@@ -1246,7 +1277,8 @@ function renderAnnual(r) {
   const flag = (f) => h("li", { class: "tone tone-" + f.tone }, h("span", { class: "tone-mark", "aria-hidden": "true", text: TONE_MARK[f.tone] }),
     h("span", {}, h("b", { text: f.label }), h("blockquote", { text: "“" + f.text + "”" })));
   return h("div", {},
-    h("p", { class: "small" }, `${r.form} for the year ending ${r.period} · `, h("a", { href: r.url }, "open the filing"), ` · ${r.words.toLocaleString()} words read`),
+    r.pasted ? h("p", { class: "small", text: `${r.words.toLocaleString()} words read from the text you pasted` })
+      : h("p", { class: "small" }, `${r.form} for the year ending ${r.period} · `, h("a", { href: r.url }, "open the filing"), ` · ${r.words.toLocaleString()} words read`),
     h("h3", { class: "co-h3", text: "Red flags the report states" }),
     stated.length ? h("ul", { class: "co-read" }, stated.map(flag)) : h("p", { class: "small", text: "None found. The report does not state going-concern doubt, weak financial controls, a restatement, or similar." }),
     hedged.length > 0 && h("details", { class: "co-hedged" }, h("summary", { text: `Mentioned only as things that could happen (${hedged.length})` }),
@@ -1254,11 +1286,12 @@ function renderAnnual(r) {
       h("ul", { class: "co-read" }, hedged.map(flag))),
     h("h3", { class: "co-h3", text: "What management says moved the numbers" }),
     r.drivers.length ? h("ul", { class: "co-quotes" }, r.drivers.map((d) => h("li", {}, glossNodes(d))))
-      : h("p", { class: "small", text: r.sections.mdna ? "No sentence clearly tying a percentage change to a cause." : "Could not find the Management's Discussion section in this filing's layout." }),
-    h("h3", { class: "co-h3", text: r.prior ? `Risk wording that is new since the report for ${r.prior.period}` : "Risk wording that is new since last year" }),
-    r.new_risks && r.new_risks.length ? h("ul", { class: "co-quotes" }, r.new_risks.map((d) => h("li", {}, glossNodes(d))))
-      : h("p", { class: "small", text: r.new_risks ? "Nothing stands out: the risk section reads much like last year's." : !r.sections.risk ? "Could not find the Risk Factors section in this filing's layout, so this check was skipped." : "Last year's report was not available to compare with." }),
-    r.new_risks && r.new_risks.length ? h("p", { class: "fine", text: "This compares wording, so it also catches risks that were merely rephrased. It shows where to look." }) : null);
+      : h("p", { class: "small", text: r.pasted || r.sections.mdna ? "No sentence clearly tying a change to a cause." : "Could not find the Management's Discussion section in this filing's layout." }),
+    r.pasted ? h("p", { class: "fine", text: "Only the text you pasted was scanned. To see what changed since last year, paste last year's section too and compare the two lists." }) : [
+      h("h3", { class: "co-h3", text: r.prior ? `Risk wording that is new since the report for ${r.prior.period}` : "Risk wording that is new since last year" }),
+      r.new_risks && r.new_risks.length ? h("ul", { class: "co-quotes" }, r.new_risks.map((d) => h("li", {}, glossNodes(d))))
+        : h("p", { class: "small", text: r.new_risks ? "Nothing stands out: the risk section reads much like last year's." : !r.sections.risk ? "Could not find the Risk Factors section in this filing's layout, so this check was skipped." : "Last year's report was not available to compare with." }),
+      r.new_risks && r.new_risks.length ? h("p", { class: "fine", text: "This compares wording, so it also catches risks that were merely rephrased. It shows where to look." }) : null]);
 }
 
 function coNews(t, sym) {

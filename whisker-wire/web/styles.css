@@ -718,3 +718,5 @@ body.reader-open .fab, body.reader-open .tickpop { display: none; }   /* the rea
   .dev { grid-template-columns: minmax(0, 1fr) auto; }
   .dev-date { grid-column: 1 / -1; }
 }
+#co-paste { width: 100%; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; font: 400 15px/1.5 var(--f-read); resize: vertical; margin: 10px 0; }
+#co-paste:focus-visible { border-color: var(--ink); }
