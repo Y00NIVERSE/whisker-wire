@@ -111,6 +111,8 @@ const state = {
   signals: null, showSells: false, openCalc: new Set(),
   revealed: new Set(),   // keys of cards that have already played their reveal + count-up once this session
   cloudMode: false, loggedIn: false,   // hosted mode only; local mode never sets either
+  hosted: false,     // a public site rather than your own computer
+  memoryOn: true,    // false on a public site without accounts: no shared notes, the watchlist stays in this browser
 };
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const kindOn = (k) => !state.off.has(k);
@@ -275,12 +277,17 @@ $("#logout").addEventListener("click", async () => {
 
 async function initAccount() {
   try {
-    const { email, cloud } = await api("/api/auth/me");
+    const { email, cloud, hosted, memory } = await api("/api/auth/me");
     state.cloudMode = !!cloud;
     state.loggedIn = !!email;
+    state.hosted = !!hosted || !!cloud;
+    state.memoryOn = memory !== false;
     $("#login-btn").hidden = !cloud || state.loggedIn;
     $("#account").hidden = !state.loggedIn;
     if (state.loggedIn) $("#account-email").textContent = email;
+    const lede = $("#memory-lede");
+    if (cloud) lede.textContent = "You can read it, change it, export it or delete it. It is kept under your account, and never sent to a search engine or an AI service.";
+    else if (!state.memoryOn) lede.textContent = "Saved notes and drift checks are switched off on this public site, so nobody's notes are ever shared with strangers. Your watchlist stays in this browser. To keep notes, run Whisker Wire on your own computer (see the README).";
   } catch { /* not fatal: the app still works without the header reflecting this */ }
 }
 
@@ -288,6 +295,7 @@ async function initAccount() {
 // The watchlist lives on the server (so Tick can use it) with a spare copy in the browser.
 function commitWatch() {
   store.set("watch", [...state.watch]);   // the local copy works even if the account call below fails
+  if (!state.memoryOn) return;            // public site without accounts: this browser is the only home for the list
   memOp({ op: "watch_set", symbols: [...state.watch] }).catch(() => { /* AuthRequired already opened the modal; anything else, the local copy still works */ });
 }
 
@@ -310,6 +318,8 @@ async function memOp(body) {
 }
 
 async function loadMemory() {
+  await accountReady;   // learn first whether this site keeps notes on the server at all
+  if (!state.memoryOn) { if (state.view === "memory") renderMemory(); return; }
   try {
     const m = await api("/api/memory");
     state.mem = m;
@@ -441,8 +451,16 @@ function signInPrompt(text, reason) {
     h("button", { class: "primary", onclick: () => openAuthModal(reason) }, "Create a free account"));
 }
 
+// A public site with no accounts keeps nobody's notes on its server; only the watchlist survives, in this browser.
+function browserOnlyNote() {
+  return h("div", { class: "signin-prompt" },
+    h("p", { text: "Notes and drift checks are off on this public site. Your watchlist is kept in this browser only." }),
+    state.watch.size > 0 && h("div", { class: "chips" }, [...state.watch].map((s) => h("span", { class: "tk", text: s }))));
+}
+
 function renderMemory() {
   const m = state.mem, box = $("#memory-body");
+  if (!state.memoryOn) return fill(box, browserOnlyNote());
   if (!m) {
     if (state.cloudMode && !state.loggedIn) return fill(box, signInPrompt("Create a free account to use Tick remembers: your watchlist, thesis notes and drift checks, kept under your account.", "Create a free account to use Tick remembers."));
     return fill(box, h("p", { class: "empty", text: "Tick's memory is not available right now." }));
@@ -1071,7 +1089,10 @@ async function loadFilings() {
 function renderFilings() {
   const box = $("#filings-body"), d = state.filings;
   if (!d) return;
-  if (!d.configured) return fill(box, secSetup());
+  if (!d.configured) return fill(box, state.hosted
+    ? h("div", { class: "setup" }, h("h3", { text: "US insider filings are switched off here" }),
+        h("p", { class: "small", text: "Reading SEC filings needs the site's owner to identify themselves to the SEC, and they have not set that up. The wire and Value Radar work as normal." }))
+    : secSetup());
   const buys = d.insider.filter((r) => r.buy_usd > 0);
   const sells = d.insider.filter((r) => r.sell_usd > 0 && !r.buy_usd);
   const cluster = {};
@@ -1428,6 +1449,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tp.open 
 function renderTickMine() {
   const box = $("#tp-mine-body"), m = state.mem;
   if (!box) return;
+  if (!state.memoryOn) return fill(box, browserOnlyNote());
   if (!m) {
     if (state.cloudMode && !state.loggedIn) return fill(box, signInPrompt("Create a free account to use Tick remembers.", "Create a free account to use Tick remembers."));
     return fill(box, h("p", { class: "small", text: "Tick's memory is not available right now." }));
@@ -1470,7 +1492,7 @@ if (!store.get("fabSeen", false)) {
 /* ------------------------------------------------------------ boot */
 mountTicks();
 syncAlerts();
-initAccount();
+const accountReady = initAccount();
 initAsk();
 // Tick's memory is a fast local call, so load it first: it can set the starting market and the watchlist.
 loadMemory().finally(() => initMarket().then(() => { loadQuotes(); loadFeed(); }));

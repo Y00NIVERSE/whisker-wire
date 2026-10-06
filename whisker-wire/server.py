@@ -4,7 +4,9 @@
 Two modes, chosen entirely by whether SUPABASE_URL etc. are set (see auth.py):
 
 - Local/offline (default): no accounts, no gate, one shared "Tick remembers" file on this computer.
-  Exactly how this app has always worked. Binds to localhost only.
+  Exactly how this app has always worked. Binds to localhost only. If a host assigns PORT but accounts
+  are not set up, it still runs as a public preview, but with server-side notes and the SEC-contact
+  form switched off, because one shared file must never be writable by strangers.
 - Hosted (cloud mode): set SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_KEY/SUPABASE_JWT_SECRET and
   ALLOWED_HOSTS. The wire, Value Radar and filings stay open to anyone, so a visitor can scroll around
   before deciding anything; a free account is only asked for at the two personal features, Ask Tick and
@@ -13,11 +15,13 @@ Two modes, chosen entirely by whether SUPABASE_URL etc. are set (see auth.py):
 Standard library only either way.
 """
 import argparse
+import ipaddress
 import json
 import mimetypes
 import os
 import re
 import sys
+import threading
 import urllib.error
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,14 +36,36 @@ import tick_chat
 from markets import market_list, valid_market
 from signals import SIGNALS
 
+mimetypes.add_type("font/woff2", ".woff2")   # not every Python version knows it, and X-Content-Type-Options is nosniff
+
 WEB = (Path(__file__).parent / "web").resolve()
-CSP = ("default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+CSP = ("default-src 'self'; style-src 'self'; font-src 'self'; "
        "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 # The only two things a visitor needs an account for: asking Tick anything, and Tick remembers (which
 # is inherently per-person). Everything else - the wire, Value Radar, filings, reading an article - is
 # open to anyone, logged in or not, so there is something real to look at before ever being asked to sign up.
 PROTECTED_WHEN_CLOUD = {"/api/chat", "/api/memory"}
+
+CONN_TIMEOUT = 30    # seconds a client may stall mid-request before its connection is dropped (slow-loris guard)
+MAX_CONNECTIONS = 100
+
+
+def _hosted():
+    """True on a host that assigns PORT (Render, Fly, Heroku, ...), i.e. not one person's own computer."""
+    return bool(os.environ.get("PORT"))
+
+
+def _disabled(path):
+    """Routes that read or write one file shared by every visitor. That is exactly right on your own
+    computer and exactly wrong on a public site: strangers would see and erase each other's notes, or
+    overwrite whose name goes to the SEC. So they stay off unless each person has their own storage."""
+    cloud = auth.cloud_enabled()
+    if path == "/api/sec-contact":
+        return cloud or _hosted()          # the operator sets this via SEC_USER_AGENT instead
+    if path == "/api/memory":
+        return _hosted() and not cloud     # cloud mode keeps it per account instead
+    return False
 
 
 def _signals():
@@ -65,6 +91,8 @@ def _post_sec(body, user, ip):
 
 
 def _memory_for_chat(user):
+    if not user and _disabled("/api/memory"):
+        return None   # the shared file belongs to nobody in particular, so it must never colour a stranger's answer
     try:
         return cloud_memory.for_chat(user["id"]) if user else memory.for_chat()
     except Exception:
@@ -117,12 +145,34 @@ ROUTES = {
     "/api/health": lambda q, u, ip: _health(_mk(q)),
     "/api/ticker": lambda q, u, ip: engine.get_ticker(q.get("symbol", [""])[0]),
     "/api/article": _get_article,
-    "/api/auth/me": lambda q, u, ip: {"email": u["email"] if u else None, "cloud": auth.cloud_enabled()},
+    "/api/auth/me": lambda q, u, ip: {"email": u["email"] if u else None, "cloud": auth.cloud_enabled(),
+                                      "hosted": _hosted(), "memory": not _disabled("/api/memory")},
 }
+
+
+class BoundedServer(ThreadingHTTPServer):
+    """One thread per connection is fine for a small site, but only if connections cannot pile up forever:
+    past MAX_CONNECTIONS the extra ones are dropped at once instead of each costing a thread and its memory."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "WhiskerWire/0.1"
+    timeout = CONN_TIMEOUT   # applied to the client socket: a request that stalls is dropped, not waited on forever
 
     def _send(self, code, body, ctype, cache="no-store"):
         self.send_response(code)
@@ -157,11 +207,21 @@ class Handler(BaseHTTPRequestHandler):
         return user
 
     def _client_ip(self):
-        # Behind a host (Render etc.), self.client_address is the platform's own proxy, not the
-        # visitor; that proxy sets X-Forwarded-For for every request it forwards, since the app is
-        # never reachable directly. Locally there is no proxy, so it falls back to the raw socket peer.
-        fwd = self.headers.get("X-Forwarded-For")
-        return fwd.split(",")[0].strip() if fwd else self.client_address[0]
+        """Who is asking, for rate limiting. Locally that is just the socket peer. On a host the peer is the
+        platform's proxy, so we read what the proxy says - but only the parts a visitor cannot forge:
+        Cloudflare (Render's edge) overwrites CF-Connecting-IP, whereas X-Forwarded-For is only ever appended
+        to, so its left end is whatever the visitor typed and its right end is what our own proxies wrote."""
+        peer = self.client_address[0]
+        if not _hosted():
+            return peer
+        cand = (self.headers.get("CF-Connecting-IP") or "").strip()
+        if not cand:
+            fwd = [p.strip() for p in (self.headers.get("X-Forwarded-For") or "").split(",") if p.strip()]
+            cand = fwd[-1] if fwd else ""
+        try:
+            return str(ipaddress.ip_address(cand))   # also keeps junk out of the rate-limit table
+        except ValueError:
+            return peer
 
     def do_POST(self):
         # Guarded against cross-site requests: same-origin only, JSON only (a cross-origin page cannot
@@ -190,8 +250,8 @@ class Handler(BaseHTTPRequestHandler):
 
         user = self._user()
         cloud = auth.cloud_enabled()
-        if path == "/api/sec-contact" and cloud:
-            return self._json(404, {"error": "unknown endpoint"})   # the operator sets this via SEC_USER_AGENT instead
+        if _disabled(path):
+            return self._json(404, {"error": "unknown endpoint"})
         if path in ("/api/auth/signup", "/api/auth/login", "/api/auth/logout"):
             return self._auth_action(path, body)
         if cloud and path in PROTECTED_WHEN_CLOUD and not user:
@@ -242,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
         user = self._user()
         cloud = auth.cloud_enabled()
         if u.path.startswith("/api/"):
-            if u.path == "/api/sec-contact" and cloud:
+            if _disabled(u.path):
                 return self._json(404, {"error": "unknown endpoint"})
             fn = ROUTES.get(u.path)
             if not fn:
@@ -280,7 +340,7 @@ def main():
     # that this isn't a laptop anymore. Binding stayed local-only otherwise, even with ALLOWED_HOSTS set
     # for some other reason, so a forgotten PORT never accidentally opens the machine to the network.
     host = args.host or os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
-    srv = ThreadingHTTPServer((host, port), Handler)
+    srv = BoundedServer((host, port), Handler)
     cloud = auth.cloud_enabled()
     print(f"Whisker Wire running at http://{host}:{port}  ({'accounts on' if cloud else 'local mode, no accounts'})", flush=True)
     if cloud and not mailing.enabled():

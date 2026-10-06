@@ -5,9 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Whisker Wire: stock news radar for newer traders</title>
 <meta name="description" content="Whisker Wire reads 80+ independent news feeds, ranks the stories most likely to move a stock, and shows how well each is confirmed. Covers the US, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..500&display=swap">
+<link rel="preload" href="/fonts/bricolage-grotesque-normal-500-800-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/fonts.css">
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314221C'/%3E%3Cpath d='M6 24V9l6 5h8l6-5v15z' fill='%23E39B0B'/%3E%3C/svg%3E">
 </head>
@@ -99,7 +98,7 @@
           <li><b>Value Radar</b><span>Stocks the market has marked down, with the traps.</span></li>
           <li><b>Tick</b><span>A cat that reads with you and explains what matters.</span></li>
         </ul>
-        <p class="hero-note">Ten markets: United States, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe. Free, private, runs on your computer. Education, not financial advice.</p>
+        <p class="hero-note">Ten markets: United States, China, Hong Kong, Singapore, UK, Japan, India, Australia, Canada and Europe. Free, with no ads and no tracking. Education, not financial advice.</p>
         </div>
       </section>
       <section class="ask" id="ask" aria-labelledby="ask-h">
@@ -157,7 +156,7 @@
           <p class="small">Click any story's score to see exactly how it was built.</p>
         </div>
         <div class="panel-col" id="sec-track">
-          <p class="eyebrow">Track record (measured on this computer)</p>
+          <p class="eyebrow">Track record (measured by this app)</p>
           <div id="track-body"></div>
           <p class="eyebrow gap">Preferences</p>
           <label class="switch"><input type="checkbox" id="serious"><span>Serious mode: hide the cat mascot</span></label>
@@ -193,7 +192,7 @@
       <div class="intro">
         <p class="eyebrow">Tick remembers</p>
         <h1>What Tick knows about you, all on one page.</h1>
-        <p class="lede">You can read it, change it, export it or delete it. It is one small file on this computer. It is never sent to a search engine or an AI service.</p>
+        <p class="lede" id="memory-lede">You can read it, change it, export it or delete it. It is one small file on this computer. It is never sent to a search engine or an AI service.</p>
       </div>
       <div id="memory-body"></div>
     </div>
@@ -212,7 +211,7 @@
         <li><b>Never trade on non-public information.</b> That is illegal insider trading.</li>
       </ul>
     </section>
-    <p class="fine">Education, not advice. Data comes from public feeds and can be delayed or wrong. Runs on your machine, no account, no tracking.</p>
+    <p class="fine">Education, not advice. Data comes from public feeds and can be delayed or wrong. No ads and no tracking, and this app does not log what you read.</p>
   </aside>
 </main>
 
