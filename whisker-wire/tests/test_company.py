@@ -175,6 +175,16 @@ class ReadingTheReport(unittest.TestCase):
         self.assertGreater(len(risk), 2000)
         self.assertNotIn("Unresolved", risk)
 
+    def test_filings_that_repeat_an_item_label_on_every_paragraph_still_parse(self):
+        # Microsoft's layout: "Item 1A ITEM 1A. RISK FACTORS", then "Item 1A <paragraph>" throughout
+        body = "".join(f"<p>Item 1A {BOILER[:900]}</p>" for _ in range(3))
+        doc = (f"<html><body><p>Item 1A. Risk Factors</p><p>Item 1B. Unresolved Staff Comments</p>"
+               f"<p>Item 1A ITEM 1A. RISK FACTORS</p>{body}<p>Item 1A Our unique zebra risk could harm results.</p>"
+               f"<p>Item 1B, 1C</p><p>ITEM 1B. UNRESOLVED STAFF COMMENTS</p></body></html>")
+        risk = company.section(company.doc_lines(doc), "risk")
+        self.assertIn("zebra", risk)
+        self.assertNotIn("Item 1A", risk)
+
     def test_missing_sections_give_nothing_instead_of_junk(self):
         self.assertEqual(company.section(["Item 1A. Risk Factors", "tiny", "Item 1B. x"], "risk"), "")
 
@@ -195,6 +205,114 @@ class ReadingTheReport(unittest.TestCase):
 
     def test_a_clean_report_has_no_flags(self):
         self.assertEqual(company.scan_flags(BOILER), [])
+
+    # Each of these was a real false alarm on a real 10-K (Coca-Cola, Apple, Tesla) during the first live run.
+    def test_ongoing_concern_is_not_going_concern(self):
+        s = "In addition, ongoing concern over climate change is expected to continue to result in additional legal or regulatory requirements."
+        self.assertEqual(company.scan_flags(s), [])
+        t = "There is substantial doubt about the Company's ability to continue as a going concern within one year of this filing date."
+        self.assertEqual(company.scan_flags(t)[0]["id"], "going")
+
+    def test_a_disclaimer_about_the_litigation_reform_act_is_not_a_lawsuit(self):
+        s = "This Annual Report contains forward-looking statements within the meaning of the Private Securities Litigation Reform Act of 1995, and actual results may differ."
+        self.assertEqual(company.scan_flags(s), [])
+
+    def test_saying_nothing_was_written_down_is_not_a_write_down(self):
+        self.assertEqual(company.scan_flags("For the years ended December 31, 2025, 2024, and 2023, we did not recognize any impairment of goodwill."), [])
+        real = "In fiscal 2025 the Company recorded a non-cash goodwill impairment charge of $412 million related to its European segment."
+        self.assertEqual(company.scan_flags(real)[0]["id"], "impair")
+
+    def test_an_auditors_description_of_its_work_is_not_a_control_weakness(self):
+        s = "Our audit included obtaining an understanding of internal control over financial reporting and assessing the risk that a material weakness exists."
+        self.assertEqual(company.scan_flags(s), [])
+
+    def test_a_real_control_failure_still_gets_through_even_with_the_word_not(self):
+        s = "Management concluded that internal control over financial reporting was not effective as of year end because of the material weaknesses described below."
+        self.assertEqual(company.scan_flags(s)[0]["id"], "weak")
+        self.assertFalse(company.scan_flags(s)[0]["hedged"])
+
+    def test_generic_cyber_risk_language_is_boilerplate_but_an_actual_incident_is_not(self):
+        risk = "We face various cybersecurity attacks, including unauthorized access, which could disrupt operations and harm our reputation."
+        self.assertTrue(company.scan_flags(risk)[0]["hedged"])
+        real = "In March the Company detected a ransomware attack that encrypted certain internal systems and delayed shipments for two weeks."
+        self.assertFalse(company.scan_flags(real)[0]["hedged"])
+
+    def test_routine_regulator_requests_are_not_an_announced_investigation_but_a_received_subpoena_is(self):
+        self.assertTrue(company.scan_flags("Regulators may issue a subpoena or open a formal investigation into our practices at any time without notice.")[0]["hedged"])
+        self.assertFalse(company.scan_flags("In June the Company received a subpoena from the SEC as part of a formal investigation into its revenue recognition.")[0]["hedged"])
+
+    # Second round of real-filing fixes (Coca-Cola, Tesla, TSMC, Ford, Beyond Meat).
+    def test_we_cannot_eliminate_cyber_risk_is_not_an_incident(self):
+        s = "We cannot eliminate all risks from cybersecurity threats or provide assurances that we have not experienced an undetected cybersecurity incident."
+        self.assertTrue(company.scan_flags(s)[0]["hedged"])
+
+    def test_an_immaterial_write_down_and_an_accounting_policy_are_not_red_flags(self):
+        self.assertEqual(company.scan_flags("During 2023, we recorded an immaterial amount of impairment losses on digital assets held by the company."), [])
+        self.assertEqual(company.scan_flags("Equity investments are carried at cost, less any recognized impairment loss, and tested every year."), [])
+
+    def test_a_threshold_in_a_table_note_is_not_customer_concentration(self):
+        self.assertEqual(company.scan_flags("Major customers representing at least 10% of net revenue are listed below for each fiscal year."), [])
+        self.assertEqual(company.scan_flags("Customers that accounted for more than 10% of total net revenue are described in the notes that follow this table.")[:0], [])
+
+    def test_a_valuation_policy_mentioning_delisted_securities_is_not_a_listing_threat(self):
+        self.assertEqual(company.scan_flags("Securities that are thinly traded or delisted are valued using pricing data not observable in the market."), [])
+        real = "On March 4, 2026, we received a deficiency notice from the Nasdaq Listing Qualifications Department because our share price closed below one dollar."
+        self.assertEqual(company.scan_flags(real)[0]["id"], "delist")
+        self.assertFalse(company.scan_flags(real)[0]["hedged"])
+
+    def test_a_policy_for_handling_incidents_is_not_an_incident(self):
+        s = "When a cybersecurity incident is identified, our policy is to review and triage it and escalate it to senior management."
+        self.assertTrue(company.scan_flags(s)[0]["hedged"])
+
+    def test_generic_class_action_risk_text_is_not_a_filed_lawsuit(self):
+        generic = "In the past, following volatility in the price of a company's shares, securities class action litigation often has been brought against that company."
+        self.assertTrue(company.scan_flags(generic) == [] or company.scan_flags(generic)[0]["hedged"])
+        real = "On August 30, 2024, a putative class action complaint was filed against the Company and its Chief Executive Officer."
+        self.assertFalse(company.scan_flags(real)[0]["hedged"])
+
+    def test_governance_descriptions_denials_and_footnotes_are_not_findings(self):
+        self.assertTrue(company.scan_flags("The Audit Committee reviews and provides oversight of our cybersecurity processes and any cybersecurity incident that is identified.")[0]["hedged"])
+        self.assertEqual(company.scan_flags("At this time, we have no such class actions filed against us and we are not aware of any pending claims."), [])
+        self.assertEqual(company.scan_flags("(a)2023 includes $28 million related to restructuring charges in India and $41 million in North America."), [])
+
+    def test_half_sentences_are_not_offered_as_new_risks(self):
+        old = "Our business could be harmed by supply chain disruption that delays shipments of key components to our customers worldwide. " * 3
+        new = "and caused disruptions in our production operations, which may increase the risk of adverse effects on revenue in future periods and years."
+        self.assertEqual(company.new_risks(new, old), [])
+
+    def test_contract_warranties_are_not_loan_covenants(self):
+        s = "We have agreed to indemnify certain parties against losses arising from a breach of representations, warranties or covenants in those agreements."
+        self.assertTrue(company.scan_flags(s) == [] or company.scan_flags(s)[0]["hedged"])
+        real = "We were not in compliance with a financial covenant under our credit facility at year end and obtained a waiver from our lenders."
+        self.assertFalse(company.scan_flags(real)[0]["hedged"])
+
+    def test_bullets_are_stripped_from_the_front_of_quotes(self):
+        self.assertEqual(company.sentences("•Net sales increased 5% primarily due to volume.")[0], "Net sales increased 5% primarily due to volume.")
+
+    def test_connective_openings_are_not_offered_as_new_risks(self):
+        old = "Our business could be harmed by supply chain disruption that delays shipments of key components to our customers worldwide. " * 3
+        new = ("However, such agreements may not always be available on acceptable terms and further litigation may still arise from them over time. "
+               "Newly imposed export controls on advanced chips may restrict our ability to sell to certain regions and could cause adverse effects on revenue.")
+        found = company.new_risks(new, old)
+        self.assertEqual(len(found), 1)
+        self.assertIn("export controls", found[0])
+
+    def test_us_abbreviations_do_not_split_sentences(self):
+        s = company.sentences("The U.S. District Court ruled against Apple Inc. in the case. Separately, the company appealed.")
+        self.assertEqual(len(s), 2)
+        self.assertTrue(s[0].startswith("The U.S. District Court"))
+
+    def test_management_reasons_in_plain_words_count_when_they_are_about_the_big_lines(self):
+        text = ("Products net sales increased during 2025 compared to 2024 primarily due to higher net sales of the flagship phone and laptops.\n"
+                "Employee morale increased primarily due to the new cafeteria opening at the main campus last spring season.")
+        d = company.drivers(text)
+        self.assertEqual(len(d), 1)
+        self.assertIn("Products net sales", d[0])
+
+    def test_windows_1252_filings_keep_their_apostrophes(self):
+        raw = "The Company’s results".encode("cp1252")
+        self.assertEqual(company._decode(raw), "The Company’s results")
+        self.assertEqual(company._decode("café".encode("utf-8")), "café")
 
     def test_management_reasons_for_changes_are_picked_out(self):
         text = ("Net sales increased 12% compared with last year, primarily due to higher demand for services in North America.\n"
