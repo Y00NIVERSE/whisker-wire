@@ -370,12 +370,23 @@ def doc_lines(html_text):
     return out
 
 
+# Some filings (Microsoft's) repeat an "Item 1A" label in front of almost every paragraph, so a heading can read
+# "Item 1A ITEM 1A. RISK FACTORS": the (?:item ...)+ group allows the label to appear more than once.
 _SECTIONS = {
-    "10-K": {"risk": (r"^item\s*1a\b[\s.:\-–—]*risk\s+factors", r"^item\s*(1b|1c|2)\b"),
-             "mdna": (r"^item\s*7\b[\s.:\-–—]*management", r"^item\s*(7a|8)\b")},
+    "10-K": {"risk": (r"^(?:item\s*1a\b[\s.:\-–—]*)+risk\s+factors", r"^item\s*(1b|1c|2)\b"),
+             "mdna": (r"^(?:item\s*7\b[\s.:\-–—]*)+management", r"^item\s*(7a|8)\b")},
     "20-F": {"risk": (r"^(item\s*3\.?\s*)?(d\.?\s*)?risk\s+factors\s*$", r"^item\s*4\b"),
              "mdna": (r"^item\s*5\b[\s.:\-–—]*operating", r"^item\s*6\b")},
 }
+
+
+_LABEL = re.compile(r"^item\s*\d+[a-c]?(?![\w.:,])\s*", re.I)
+
+
+def strip_labels(lines):
+    """Drop the repeated 'Item 1A ' label some filings put in front of body paragraphs (headings keep theirs:
+    they have a period or colon after the number)."""
+    return [_LABEL.sub("", ln) for ln in lines]
 
 
 def section(lines, kind, form="10-K"):
@@ -389,34 +400,58 @@ def section(lines, kind, form="10-K"):
             continue
         j = next((k for k in range(i + 1, len(lines)) if erx.search(lines[k][:80])), None)
         if j is not None:
-            body = "\n".join(lines[i + 1:j])
+            body = "\n".join(strip_labels(lines[i + 1:j]))
             if len(body) > len(best):
                 best = body
     return best if len(best) >= 2000 else ""
 
 
-_SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"“(])")
+# not after abbreviations: "U.S. District Court" and "Apple Inc. announced" are not sentence ends
+_SENT = re.compile(r"(?<!\bU\.S\.)(?<!\bInc\.)(?<!\bCo\.)(?<!\bCorp\.)(?<!\bLtd\.)(?<!\bNo\.)(?<!\bvs\.)(?<!\bSt\.)(?<!\bDr\.)(?<!\bMr\.)(?<=[.!?])\s+(?=[A-Z\"“(])")
 
 
 def sentences(text):
-    return [s.strip() for line in text.split("\n") for s in _SENT.split(line) if s.strip()]
+    out = []
+    for line in text.split("\n"):
+        for s in _SENT.split(line):
+            s = s.strip().lstrip("•·▪●‣◦ ")   # bullet glyphs the HTML puts in front of list items
+            if s:
+                out.append(s)
+    return out
 
 
-_HEDGE = re.compile(r"\b(could|may|might|would|if|potential|possible|risk that|from time to time|no assurance|cannot assure|unable to predict)\b", re.I)
+_HEDGE = re.compile(r"\b(could|may|might|would|if|potential|possible|risk (that|of)|from time to time|no assurance|cannot assure|unable to predict|"
+                    r"(is|are) subject to|subject to the|exposed to|vulnerab\w+|susceptible|we face|faces|cannot|assurances?|"
+                    r"our policy|incident response|response plan|oversight|oversee\w*|audit committee|governance|reviews?|"
+                    r"often|following periods of)\b", re.I)
+# A sentence saying the problem did NOT happen, an auditor describing what it checked for, or an accounting
+# policy ("carried at cost, less any recognized impairment") is not a red flag.
+_NEG = re.compile(r"\b(did not|do not|does not|has not|have not|had no|there (were|are|was) no|no|not)\s+(\w+\s+){0,3}(recogni[sz]e|record|incur|identify|identified|material weakness|impairment|restate)\w*"
+                  r"|not identified|no material weakness|assess(ing)? the risk|whether a material weakness|material weakness(es)? (exists?|that exist)|reform act"
+                  r"|immaterial|less (any )?(accumulated |recogni[sz]ed )|accumulated impairment|net of impairment"
+                  r"|\bno (such )?(class actions?|lawsuits?|investigations?|subpoenas?|proceedings?)|not (currently )?(a party|subject to|aware of)", re.I)
+# (id, label, tone, phrase, optional "it really happened" wording). Flags whose phrase is mostly boilerplate
+# (every report says it could suffer a cyber attack) only count as stated when the sentence also describes
+# something that did happen. Tuned against real 10-Ks: "ongoing concern over climate change" is not going
+# concern, and "we did not recognize any impairment" is not a write-down.
 FLAGS = [
-    ("going", "Doubt it can keep going (going concern)", "bad", r"substantial doubt[^.]{0,100}going concern|going concern"),
-    ("weak", "Weakness in its financial controls", "bad", r"material weakness"),
-    ("restate", "Restated past results", "bad", r"restate(d|ment)[^.]{0,80}(previously issued|prior period|financial statements)|non-reliance"),
-    ("delist", "Exchange listing at risk", "bad", r"\bdelist|minimum bid price|continued listing (standard|requirement)"),
-    ("auditor", "Changed or lost its auditor", "warn", r"(dismiss|resign|terminat)\w*[^.]{0,60}(independent registered public accounting firm|auditor)|(auditor|accounting firm)[^.]{0,50}(dismissed|resigned)"),
-    ("probe", "Government or regulator investigation", "warn", r"subpoena|wells notice|formal investigation|civil investigative demand|sec (investigation|inquiry)"),
-    ("covenant", "Trouble with its loan terms (covenants)", "warn", r"(violat|breach|not in compliance|waiver)\w*[^.]{0,80}covenant|covenant[^.]{0,80}(violat|breach|waiver)"),
-    ("impair", "Wrote down the value of assets", "warn", r"(goodwill|long-lived assets?)[^.]{0,80}impairment|impairment (charge|of goodwill)"),
-    ("cyber", "Cybersecurity incident", "warn", r"(cybersecurity|cyber) (incident|attack)|data breach|ransomware"),
-    ("suit", "Class action or major lawsuit", "info", r"class action|securities litigation"),
-    ("cuts", "Job cuts or restructuring", "info", r"reduction in (force|workforce)|restructuring (plan|charge)|layoffs"),
+    ("going", "Doubt it can keep going (going concern)", "bad", r"substantial doubt[^.]{0,100}going concern|(?<![a-z])going concern", None),
+    ("weak", "Weakness in its financial controls", "bad", r"material weakness", None),
+    ("restate", "Restated past results", "bad", r"restate(d|ment)[^.]{0,80}(previously issued|prior period|financial statements)|non-reliance", None),
+    ("delist", "Exchange listing at risk", "bad", r"delisting (notice|determination)|notice from (the )?(nasdaq|nyse|exchange)|deficiency notice|minimum bid price|continued listing (standard|requirement)|(nasdaq|nyse)[^.]{0,80}(deficien|non-?complian)", None),
+    ("auditor", "Changed or lost its auditor", "warn", r"(dismissed|resigned|terminated|replaced)[^.]{0,60}(independent registered public accounting firm|auditors?)|(independent registered public accounting firm|auditors?)[^.]{0,40}(was|were|has been|have been) (dismissed|replaced)|resignation of [^.]{0,40}(auditor|accounting firm)", None),
+    ("probe", "Government or regulator investigation", "warn", r"subpoena|wells notice|formal investigation|civil investigative demand|sec (investigation|inquiry)",
+     r"\b(received|issued|opened|commenced|initiated|announced|investigating)\b"),
+    ("covenant", "Trouble with its loan terms (covenants)", "warn", r"(violat|breach|not in compliance|waiver)\w*[^.]{0,80}covenant|covenant[^.]{0,80}(violat|breach|waiver)",
+     r"\b(credit|loans?|debt|lenders?|notes|indenture|facility|financial covenants?)\b"),
+    ("impair", "Wrote down the value of assets", "warn", r"(recorded|recognized|recognised|incurred|took)[^.]{0,60}impairment|impairment (charges?|losses?)[^.]{0,40}\$\s?[\d.,]+",
+     r"\$\s?[\d.,]+|\b(million|billion)\b|\bin (fiscal )?(19|20)\d\d\b|during (the )?(year|quarter|fiscal|three|six|nine|twelve)|fourth quarter"),
+    ("cyber", "Cybersecurity incident", "warn", r"(cybersecurity|cyber) (incident|attack)|data breach|ransomware",
+     r"\b(experienced|suffered|detected|discovered|identified|was (the )?(subject|victim|target)|were (the )?(subjects?|victims|targets))\b"),
+    ("suit", "Class action or major lawsuit", "info", r"class action|securities litigation", r"\b(was|were) filed|putative|filed (a|an|against)|lead plaintiff|consolidated"),
+    ("cuts", "Job cuts or restructuring", "info", r"reduction in (force|workforce)|restructuring (plan|charge)|layoffs", None),
 ]
-_FLAG_RX = [(i, lab, tone, re.compile(rx, re.I)) for i, lab, tone, rx in FLAGS]
+_FLAG_RX = [(i, lab, tone, re.compile(rx, re.I), re.compile(need, re.I) if need else None) for i, lab, tone, rx, need in FLAGS]
 _CONC = re.compile(r"(\d{2})% of (?:our |the company'?s |its )?(?:total |net |consolidated )?(?:net )?(?:revenues?|sales)", re.I)
 
 
@@ -425,17 +460,21 @@ def scan_flags(text):
     every report mentions going concern or a breach *hypothetically*; those are shown, but toned down."""
     found = {}
     for s in sentences(text):
-        if not 40 <= len(s) <= 700:
+        if not 40 <= len(s) <= 700 or re.match(r"^\(\w{1,2}\)", s):   # a table footnote marker, not prose
             continue
-        for fid, label, tone, rx in _FLAG_RX:
+        if _NEG.search(s):
+            continue
+        for fid, label, tone, rx, need in _FLAG_RX:
             if rx.search(s):
-                hedged = bool(_HEDGE.search(s))
+                hedged = bool(_HEDGE.search(s)) or bool(need and not need.search(s))
                 cur = found.get(fid)
                 if cur is None or (cur["hedged"] and not hedged):
                     found[fid] = {"id": fid, "label": label, "tone": "info" if hedged and tone != "info" else tone,
                                   "hedged": hedged, "text": s[:320] + ("…" if len(s) > 320 else "")}
         m = _CONC.search(s)
-        if m and int(m.group(1)) >= 10 and "customer" in s.lower() and "conc" not in found:
+        # "customers representing at least 10% of revenue" is how a table defines who to list, not a finding
+        if m and int(m.group(1)) >= 10 and "customer" in s.lower() and "conc" not in found \
+                and not re.search(r"\b(at least|more than|exceed\w*|in excess of|greater than|over)\s+\d+%", s, re.I):
             found["conc"] = {"id": "conc", "label": f"Depends on a few big customers ({m.group(1)}% of sales from one)",
                              "tone": "warn", "hedged": False, "text": s[:320] + ("…" if len(s) > 320 else "")}
     order = {"bad": 0, "warn": 1, "info": 2}
@@ -448,11 +487,16 @@ _BIG = re.compile(r"(revenue|net sales|gross margin|operating income|operating e
 
 
 def drivers(mdna, limit=5):
-    """Sentences where management itself says what moved a number, and why."""
+    """Sentences where management itself says what moved a number, and why. Ones with a figure come first;
+    plain-words ones count only when they are about the big lines (sales, margins, profit, costs), because
+    some companies explain their year without quoting a single percentage."""
     scored = []
     for s in sentences(mdna):
-        if 70 <= len(s) <= 420 and re.search(r"\d+(\.\d+)?%", s) and _DRIVER.search(s) and _CAUSE.search(s):
-            scored.append((0 if _BIG.search(s) else 1, len(scored), s))
+        if not 70 <= len(s) <= 420 or not _DRIVER.search(s) or not _CAUSE.search(s):
+            continue
+        has_num = bool(re.search(r"\d+(\.\d+)?%|\$\s?[\d.,]+\s?(million|billion)", s))
+        if has_num or _BIG.search(s):
+            scored.append((0 if has_num and _BIG.search(s) else 1 if has_num else 2, len(scored), s))
     scored.sort()
     return [s for _, _, s in scored[:limit]]
 
@@ -473,6 +517,10 @@ def new_risks(cur, prior, limit=6):
         words = len(s.split())
         if not 14 <= words <= 90 or not re.search(r"\b(adverse|harm|loss|could|may|risk)\b", s, re.I):
             continue
+        if re.match(r"(However|These|This|Further|Moreover|In addition|For example|Such)\b", s) or "risk factors are not" in s:
+            continue   # connective or boilerplate openings: they point at nothing specific
+        if not (s[0].isupper() or s[0].isdigit()):
+            continue   # starts mid-sentence: the paragraph broke across lines, so this is half a sentence
         sh = _shingles(s)
         if sh and len(sh & seen) / len(sh) < 0.15:
             out.append((len(sh & seen) / len(sh), s))
@@ -480,19 +528,28 @@ def new_risks(cur, prior, limit=6):
     return [s[:300] + ("…" if len(s) > 300 else "") for _, s in out[:limit]]
 
 
+def _decode(raw):
+    """Filings are UTF-8 or, in older templates, Windows-1252. Guessing UTF-8 for the latter turns every
+    apostrophe into a replacement mark in the quotes we show."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", "replace")
+
+
 def analyze(cik, cur, prior):
-    html_text = engine._sec_get(_doc_url(cik, cur), max_bytes=15_000_000, timeout=50).decode("utf-8", "replace")
+    html_text = _decode(engine._sec_get(_doc_url(cik, cur), max_bytes=15_000_000, timeout=50))
     lines = doc_lines(html_text)
     del html_text
     risk, mdna = section(lines, "risk", cur["form"]), section(lines, "mdna", cur["form"])
     out = {"available": True, "form": cur["form"], "filed": cur["filingDate"], "period": cur["reportDate"],
-           "url": _doc_url(cik, cur), "flags": scan_flags("\n".join(lines)), "drivers": drivers(mdna),
+           "url": _doc_url(cik, cur), "flags": scan_flags("\n".join(strip_labels(lines))), "drivers": drivers(mdna),
            "sections": {"risk": bool(risk), "mdna": bool(mdna)}, "words": sum(len(x.split()) for x in lines),
            "prior": None, "new_risks": None}
     del lines
     if prior and risk:
         try:
-            plines = doc_lines(engine._sec_get(_doc_url(cik, prior), max_bytes=15_000_000, timeout=50).decode("utf-8", "replace"))
+            plines = doc_lines(_decode(engine._sec_get(_doc_url(cik, prior), max_bytes=15_000_000, timeout=50)))
             out["prior"] = {"form": prior["form"], "filed": prior["filingDate"], "period": prior["reportDate"]}
             out["new_risks"] = new_risks(risk, section(plines, "risk", prior["form"]))
         except Exception:
