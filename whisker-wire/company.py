@@ -23,6 +23,8 @@ import urllib.parse
 from html.parser import HTMLParser
 
 import engine
+import lens
+from textutil import sentences
 
 DATA = "https://data.sec.gov"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -478,20 +480,6 @@ def section(lines, kind, form="10-K"):
     return best if len(best) >= 2000 else ""
 
 
-# not after abbreviations: "U.S. District Court" and "Apple Inc. announced" are not sentence ends
-_SENT = re.compile(r"(?<!\bU\.S\.)(?<!\bInc\.)(?<!\bCo\.)(?<!\bCorp\.)(?<!\bLtd\.)(?<!\bNo\.)(?<!\bvs\.)(?<!\bSt\.)(?<!\bDr\.)(?<!\bMr\.)(?<=[.!?])\s+(?=[A-Z\"“(])")
-
-
-def sentences(text):
-    out = []
-    for line in text.split("\n"):
-        for s in _SENT.split(line):
-            s = s.strip().lstrip("•·▪●‣◦ ")   # bullet glyphs the HTML puts in front of list items
-            if s:
-                out.append(s)
-    return out
-
-
 _HEDGE = re.compile(r"\b(could|may|might|would|if|potential|possible|risk (that|of)|from time to time|no assurance|cannot assure|unable to predict|"
                     r"(is|are) subject to|subject to the|exposed to|vulnerab\w+|susceptible|we face|faces|cannot|assurances?|"
                     r"our policy|incident response|response plan|oversight|oversee\w*|audit committee|governance|"
@@ -618,6 +606,8 @@ def analyze(cik, cur, prior):
            "url": _doc_url(cik, cur), "flags": scan_flags("\n".join(strip_labels(lines))), "drivers": drivers(mdna),
            "sections": {"risk": bool(risk), "mdna": bool(mdna)}, "words": sum(len(x.split()) for x in lines),
            "prior": None, "new_risks": None}
+    # the profit lens reads Management's Discussion (where the outlook and the reasons live), else the whole document
+    out["lens"] = lens.analyze(mdna.split("\n") if mdna else strip_labels(lines))
     del lines
     if prior and risk:
         try:
@@ -663,7 +653,8 @@ def analyze_text(text):
     lines = _unwrap(text)
     joined = "\n".join(lines)
     return {"available": True, "pasted": True, "words": len(joined.split()), "flags": scan_flags(joined),
-            "drivers": drivers(joined), "sections": {"risk": None, "mdna": None}, "prior": None, "new_risks": None}
+            "drivers": drivers(joined), "sections": {"risk": None, "mdna": None}, "prior": None, "new_risks": None,
+            "lens": lens.analyze(lines)}
 
 
 def get_annual_report(symbol):

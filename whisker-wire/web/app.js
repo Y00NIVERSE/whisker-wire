@@ -1284,6 +1284,7 @@ function renderAnnual(r) {
     hedged.length > 0 && h("details", { class: "co-hedged" }, h("summary", { text: `Mentioned only as things that could happen (${hedged.length})` }),
       h("p", { class: "small", text: "Almost every annual report lists these as hypothetical risks. They are here so nothing is hidden, but on their own they are boilerplate." }),
       h("ul", { class: "co-read" }, hedged.map(flag))),
+    r.lens && lensEl(r.lens),
     h("h3", { class: "co-h3", text: "What management says moved the numbers" }),
     r.drivers.length ? h("ul", { class: "co-quotes" }, r.drivers.map((d) => h("li", {}, glossNodes(d))))
       : h("p", { class: "small", text: r.pasted || r.sections.mdna ? "No sentence clearly tying a change to a cause." : "Could not find the Management's Discussion section in this filing's layout." }),
@@ -1304,6 +1305,72 @@ function coNews(t, sym) {
       h("span", { class: "small", text: [n.publisher, n.ts ? ago(n.ts) : ""].filter(Boolean).join(" · ") }))))
       : h("p", { class: "empty", text: "No recent headlines found for " + sym + "." }),
     h("p", {}, h("button", { class: "chip", onclick: () => askAbout(`What is in ${sym}'s annual report and what are the red flags?`) }, "Ask Tick about this annual report")));
+}
+
+
+/* ------------------------------------------------------------ Tick's profit lens: looking back vs looking ahead */
+// "Looking back" is what already happened: facts a person can check. "Looking ahead" is what the company says it
+// expects: promises that can miss. The server does the reading (lens.py); this only draws it.
+const LENS_LEAN = { up: ["Profit signals lean up", "lean-bull"], down: ["Profit signals lean down", "lean-bear"],
+  mixed: ["Mixed profit signals", "lean-mixed"], unclear: ["No clear profit signal", "lean-neutral"] };
+const GUIDE_TAG = { raise: ["Outlook raised", "tag-bull"], cut: ["Outlook cut", "tag-bear"], hold: ["Outlook held", ""] };
+
+function impliedText(m) {
+  if (!m) return "";
+  return m.unit === "pp"
+    ? `Puts ${m.metric} at about ${m.now}%, ${m.delta >= 0 ? "up" : "down"} ${Math.abs(m.delta)} points on the reported figure.`
+    : `Implies ${m.metric} ${m.delta >= 0 ? "up" : "down"} about ${Math.abs(m.delta)}% on the last reported figure (rough: check the periods match).`;
+}
+
+function lensEl(l) {
+  if (!l || !l.available) return null;
+  const tag = (t, cls = "") => h("span", { class: "tagx " + cls, text: t });
+  const row = (i, ahead) => h("li", { class: "tone tone-" + i.tone },
+    h("span", { class: "tone-mark", "aria-hidden": "true", text: TONE_MARK[i.tone] || "•" }),
+    h("span", {},
+      h("span", { class: "lens-tags" },
+        i.theme && tag(i.theme), i.guidance && tag(...GUIDE_TAG[i.guidance]),
+        ahead && tag(i.firm ? "Firm" : "Hedged", i.firm ? "" : "tag-fine"), ahead && i.horizon && tag(i.horizon)),
+      h("span", { class: "lens-text" }, glossNodes(i.text)),
+      i.figures && i.figures.length > 0 && h("span", { class: "facts" }, i.figures.map((f) => h("span", { class: "fact" }, h("b", { text: f })))),
+      ahead && i.implied && h("span", { class: "lens-implied small", text: impliedText(i.implied) })));
+  const [leanText, leanCls] = LENS_LEAN[l.read.lean] || LENS_LEAN.unclear;
+  const col = (title, note, list, ahead) => h("div", {}, h("h4", { text: title }), h("p", { class: "small", text: note }),
+    list.length ? h("ul", { class: "co-read" }, list.map((i) => row(i, ahead))) : h("p", { class: "small", text: ahead ? "Nothing about the future that Tick could pin a number or a direction to." : "No reported results found." }));
+  return h("div", { class: "lens-in" },
+    h("h3", {}, "Looking back vs looking ahead", h("span", { class: "lean " + leanCls, text: leanText })),
+    h("p", { class: "small", text: "Looking back is what already happened: facts you can check. Looking ahead is what the company says it expects: promises that can miss." }),
+    l.read.points.length > 0 && h("ul", { class: "co-read" }, l.read.points.map(toneLi)),
+    h("div", { class: "lens-cols" },
+      col("Looking back", "Reported results.", l.looking_back, false),
+      col("Looking ahead", "Expectations and guidance.", l.looking_ahead, true)),
+    l.drivers.length > 0 && [h("h4", { text: "What moves profit" }),
+      h("ul", { class: "co-read" }, l.drivers.map((d) => h("li", { class: "tone tone-" + d.tone },
+        h("span", { class: "tone-mark", "aria-hidden": "true", text: TONE_MARK[d.tone] || "•" }),
+        h("span", {}, h("span", { class: "lens-tags" }, tag(d.theme), d.leading && tag("Early signal", "tag-corr"), tag(d.when === "ahead" ? "Looking ahead" : "Looking back")),
+          h("span", { class: "lens-text" }, glossNodes(d.text))))))],
+    l.one_offs.length > 0 && [h("h4", { text: "One-offs that will not repeat" }),
+      h("ul", { class: "co-quotes" }, l.one_offs.map((o) => h("li", {}, glossNodes(o.text))))],
+    l.read.check.length > 0 && [h("h4", { text: "Check next" }), h("ul", { class: "co-quotes" }, l.read.check.map((c) => h("li", { text: c })))],
+    h("p", { class: "fine", text: (l.disclaimer ? "The standard legal “forward-looking statements” notice was left out: it sounds like an outlook but promises nothing. " : "")
+      + "Tick reads words and numbers, not meaning. This shows what the text says is ahead, not a forecast: management is usually optimistic, so compare any guidance with what analysts expect." }));
+}
+
+let lensToken = 0;
+async function loadLens(paragraphs) {
+  const host = $("#lens"), my = ++lensToken;
+  reader.lensOk = false; host.hidden = true;
+  if (paragraphs.join(" ").length < 300) return;
+  host.hidden = false;
+  fill(host, h("p", { class: "small", role: "status", text: "Tick is working out what already happened and what comes next…" }));
+  try {
+    const el = lensEl(await postJson("/api/profit-lens", { paragraphs }));
+    if (my !== lensToken) return;
+    if (!el) { host.hidden = true; return; }       // not a profit story: say nothing rather than clutter the page
+    reader.lensOk = true;
+    fill(host, el);
+    host.hidden = $("#take").hidden && reader.page > 0;
+  } catch { if (my === lensToken) host.hidden = true; }
 }
 
 /* ------------------------------------------------------------ reader + Tick */
@@ -1388,7 +1455,7 @@ async function loadStory(s) {
 async function loadUrl(url, fallbackTitle, summary = "") {
   showPaste(false);
   head({ title: fallbackTitle || url, url });
-  $("#take").hidden = true; fill($("#article"), h("p", { class: "small", text: "Tick is reading the page…" }));
+  $("#take").hidden = true; $("#lens").hidden = true; fill($("#article"), h("p", { class: "small", text: "Tick is reading the page…" }));
   catEl.hidden = false; setCatState("think"); placeCat(null); fill($("#cat-note"), h("div", { text: "Reading… one moment." }));
   try {
     const a = await api("/api/article?url=" + encodeURIComponent(url));
@@ -1425,6 +1492,7 @@ async function render({ title, url, paragraphs, keepErr }, partial = false) {
       h("span", { style: { color: "var(--ink)" }, text: t.text })))) : h("p", { class: "small", text: "No strong signals in this text. That is information too: nothing here should change a trade." }),
     res.facts.length > 0 && h("div", { class: "facts" }, res.facts.map((f) => h("span", { class: "fact", title: f.context }, h("b", { text: f.value })))),
     h("p", { class: "fine", text: `Tick reads ${res.sentences} sentences by keywords and numbers. She spots patterns, not truth: verify anything you might act on.${partial ? " (Headline only.)" : ""}` }));
+  if (partial) { $("#lens").hidden = true; reader.lensOk = false; } else loadLens(paragraphs);
 
   // article, split into short pages so nobody has to scroll a wall of text
   const seenTerms = new Set();
@@ -1483,6 +1551,7 @@ function showReaderPage(n, { top = true } = {}) {
   $$(".rpage", $("#article")).forEach((p, i) => { p.hidden = i !== n; });
   reader.page = n;
   $("#take").hidden = n > 0;   // the summary belongs to the first page
+  $("#lens").hidden = n > 0 || !reader.lensOk;
   renderReaderPager();
   if (top) scroller.scrollTo({ top: 0, behavior: "instant" });
 }

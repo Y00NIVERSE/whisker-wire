@@ -31,6 +31,7 @@ import auth
 import cloud_memory
 import company
 import engine
+import lens
 import mailing
 import memory
 import tick_chat
@@ -142,12 +143,27 @@ def _post_analyze(body, user, ip):
     return company.analyze_text(body.get("text", ""))
 
 
+def _post_lens(body, user, ip):
+    """Tick's profit lens over whatever the reader is showing: a list of paragraphs, or one block of text."""
+    tick_chat.rate_limit("lens:" + ip, limit=30, window=600)
+    paras = body.get("paragraphs")
+    if isinstance(paras, list):
+        paras = [p for p in paras[:3000] if isinstance(p, str)]
+        if sum(len(p) for p in paras) > lens.MAX_CHARS:
+            raise ValueError("That is too much text for Tick to read at once.")
+        if sum(len(p) for p in paras) < 200:
+            raise ValueError("Give Tick a few paragraphs to read first.")
+        return lens.analyze(paras)
+    return lens.analyze_text(body.get("text", ""))
+
+
 # path -> (largest body accepted in bytes, handler(body, user, ip))
 POST_ROUTES = {
     "/api/sec-contact": (2048, _post_sec),
     "/api/chat": (8192, _post_chat),
     "/api/memory": (8192, _post_memory),
     "/api/analyze-text": (company.MAX_PASTE * 2 + 1024, _post_analyze),   # JSON escaping can double the size
+    "/api/profit-lens": (lens.MAX_CHARS * 2 + 1024, _post_lens),
     "/api/auth/signup": (512, _noop),
     "/api/auth/login": (512, _noop),
     "/api/auth/logout": (256, _noop),

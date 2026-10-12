@@ -536,6 +536,19 @@ class AskTick(unittest.TestCase):
         self.assertIn("AI may erode demand", text)
         self.assertEqual(links[0]["engine"], "SEC EDGAR")
 
+    def test_the_annual_reports_outlook_and_profit_lens_reach_the_answer(self):
+        ann = dict(self.ANN, lens={"available": True, "read": {"lean": "up", "points": [
+            {"tone": "good", "text": "The outlook itself was raised: that is the strongest single signal in the text."},
+            {"tone": "info", "text": "Looking back, 3 results moved the right way."}]},
+            "looking_ahead": [{"text": "We expect 2026 capital expenditures to be approximately $2.2 billion.", "strong": True},
+                              {"text": "Future capital requirements will depend on many factors.", "strong": False}]})
+        blocks, _ = tick_chat.company_blocks("Acme", self.CO, ann, True)
+        text = json.dumps(blocks)
+        self.assertIn("capital expenditures to be approximately $2.2 billion", text)
+        self.assertNotIn("will depend on many factors", text)       # a bare "will" is not an outlook
+        self.assertIn("outlook itself was raised", text)
+        self.assertNotIn("moved the right way", text)               # the neutral line is left out of the short answer
+
     def test_slow_annual_report_is_explained_not_hidden(self):
         blocks, _ = tick_chat.company_blocks("Acme", self.CO, None, True)
         self.assertIn("takes a little while", json.dumps(blocks))
