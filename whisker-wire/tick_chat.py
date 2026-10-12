@@ -505,6 +505,14 @@ def company_blocks(name, co, annual, asked_annual):
             blocks.append({"type": "ul", "title": "Risk wording that is new since last year's report", "items": annual["new_risks"][:3]})
         if annual.get("drivers"):
             blocks.append({"type": "ul", "title": "What management says moved the numbers", "items": annual["drivers"][:3]})
+        lz = annual.get("lens")
+        if lz and lz.get("available"):
+            ahead = [i["text"] for i in lz["looking_ahead"] if i.get("strong")][:3]
+            if ahead:
+                blocks.append({"type": "ul", "title": "What the report says is coming (looking ahead, so promises that can miss)", "items": ahead})
+            pts = [p["text"] for p in lz["read"]["points"] if p["tone"] != "info"][:3]
+            if pts:
+                blocks.append({"type": "ul", "title": "Tick's profit lens", "items": pts})
     elif asked_annual:
         blocks.append({"type": "p", "text": "Reading a whole annual report takes a little while the first time. Ask again in a minute and it will be ready, or open the Company page."})
     return blocks, links
@@ -846,6 +854,10 @@ def build_context(market, ents, ctx, sources, mem=None):
             lines += [f"ANNUAL REPORT RED FLAG ({'mentioned as a possible risk' if f['hedged'] else 'stated'}): {f['label']}: {f['text']}" for f in ann["flags"][:4]]
             lines += ["ANNUAL REPORT NEW RISK WORDING: " + s for s in (ann.get("new_risks") or [])[:3]]
             lines += ["ANNUAL REPORT MANAGEMENT SAYS: " + s for s in (ann.get("drivers") or [])[:3]]
+            lz = ann.get("lens") or {}
+            if lz.get("available"):
+                lines += ["ANNUAL REPORT LOOKING AHEAD: " + i["text"] for i in lz["looking_ahead"] if i.get("strong")][:3]
+                lines += ["PROFIT LENS (" + lz["read"]["lean"] + "): " + p["text"] for p in lz["read"]["points"][:3]]
     elif co and (co.get("financials") or {}).get("read"):   # not a US filer: numbers only, from Yahoo
         lines.append("ANNUAL NUMBERS (Yahoo Finance, unofficial; annual report text not available): " + " | ".join(r["text"] for r in co["financials"]["read"][:5]))
     lines.append("SOURCES:")

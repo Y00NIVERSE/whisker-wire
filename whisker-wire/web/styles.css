@@ -720,3 +720,16 @@ body.reader-open .fab, body.reader-open .tickpop { display: none; }   /* the rea
 }
 #co-paste { width: 100%; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; font: 400 15px/1.5 var(--f-read); resize: vertical; margin: 10px 0; }
 #co-paste:focus-visible { border-color: var(--ink); }
+
+/* ---------- Tick's profit lens ---------- */
+.lens { margin: 18px 0; padding: 16px 18px; border: 1px solid var(--ink); background: var(--surface); box-shadow: 4px 4px 0 color-mix(in srgb, var(--ink) 30%, transparent); }
+.lens h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; font: 800 18px var(--f-display); letter-spacing: -.01em; }
+.lens h4 { font: 800 12px var(--f-display); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); margin: 18px 0 4px; }
+.lens-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; margin-top: 4px; }
+.lens-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 3px; }
+.lens-text { display: block; }
+.lens-implied { display: block; color: var(--ink-2); margin-top: 3px; }
+.lens .tone { font-size: 15px; }
+.lens .facts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tagx.tag-bull { color: var(--bull); } .tagx.tag-bear { color: var(--bear); }
+@media (max-width: 760px) { .lens-cols { grid-template-columns: 1fr; } }
