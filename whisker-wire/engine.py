@@ -631,7 +631,10 @@ _yh_lock = threading.Lock()
 _yh = {"opener": None, "crumb": None, "ts": 0.0}
 
 
-def _yahoo_session(force=False):
+YF_HOSTS = (YF, "https://query2.finance.yahoo.com")      # Yahoo throttles each host separately
+
+
+def _yahoo_session(force=False, host=YF):
     """Yahoo's custom screener wants a cookie and a matching crumb. Both are fetched from fixed Yahoo hosts."""
     with _yh_lock:
         if force or not _yh["crumb"] or time.time() - _yh["ts"] > 3000:
@@ -641,7 +644,7 @@ def _yahoo_session(force=False):
                 op.open("https://fc.yahoo.com", timeout=10)  # answers 404 but sets the cookie
             except Exception:
                 pass
-            crumb = op.open(f"{YF}/v1/test/getcrumb", timeout=10).read().decode().strip()
+            crumb = op.open(f"{host}/v1/test/getcrumb", timeout=10).read().decode().strip()
             if not crumb or "<" in crumb:
                 raise ValueError("Yahoo did not issue a session")
             _yh.update(opener=op, crumb=crumb, ts=time.time())
@@ -655,19 +658,23 @@ def _screen_market(spec, size=250):
             "query": {"operator": "AND", "operands": [
                 {"operator": "OR", "operands": [{"operator": "EQ", "operands": ["exchange", x]} for x in spec["exchanges"]]},
                 {"operator": "GT", "operands": ["intradaymarketcap", 1_000_000_000]}]}}
-    for attempt in (0, 1):
-        op, crumb = _yahoo_session(force=bool(attempt))
-        url = (f"{YF}/v1/finance/screener?crumb={urllib.parse.quote(crumb)}&lang=en-US&region=US"
-               "&formatted=false&corsDomain=finance.yahoo.com")
-        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                     headers={"Content-Type": "application/json", "User-Agent": UA_BROWSER})
+    last = None
+    for attempt, host in enumerate(YF_HOSTS + YF_HOSTS[:1]):          # query1, query2, then query1 with a fresh session
         try:
+            op, crumb = _yahoo_session(force=attempt > 0, host=host)
+            url = (f"{host}/v1/finance/screener?crumb={urllib.parse.quote(crumb)}&lang=en-US&region=US"
+                   "&formatted=false&corsDomain=finance.yahoo.com")
+            req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json", "User-Agent": UA_BROWSER})
             quotes = json.loads(op.open(req, timeout=20).read())["finance"]["result"][0].get("quotes", [])
             break
         except urllib.error.HTTPError as e:
-            if e.code in (401, 403) and attempt == 0:
-                continue  # crumb expired: get a fresh session and try once more
+            last = e
+            if e.code in (401, 403, 429):
+                continue          # crumb expired, or this host is throttling us: a fresh session on another host
             raise
+    else:
+        raise last
     # Cross-listings in other currencies (a Japanese stock on the London exchange, say) are not local companies.
     return [q for q in quotes if q.get("currency") in spec["currencies"]]
 
@@ -688,13 +695,29 @@ def rank_market_screen(quotes):
     return out
 
 
+_SCREEN_BUSY = ("Yahoo Finance is limiting this server's requests for this market's list right now. "
+                "Nothing is wrong with your connection: try again in a few minutes.")
+_screen_fail = {}          # market -> time of the last failed screen, so a throttled Yahoo is not asked again at once
+SCREEN_COOLDOWN = 120
+
+
 def get_undervalued(market="us"):
     market = valid_market(market)
 
     def run():
         if market != "us":
             spec = MARKETS[market]["screen"]
-            return {"market": market, "generated": int(time.time()), "picks": rank_market_screen(_screen_market(spec))}
+            if time.time() - _screen_fail.get(market, 0) < SCREEN_COOLDOWN:
+                raise ValueError(_SCREEN_BUSY)
+            try:
+                quotes = _screen_market(spec)
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403, 429):
+                    _screen_fail[market] = time.time()
+                    raise ValueError(_SCREEN_BUSY)
+                raise
+            _screen_fail.pop(market, None)
+            return {"market": market, "generated": int(time.time()), "picks": rank_market_screen(quotes)}
         out, seen = [], set()
         for sid, label in SCREENERS:
             try:
