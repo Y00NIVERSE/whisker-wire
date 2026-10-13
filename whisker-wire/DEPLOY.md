@@ -82,6 +82,6 @@ never shown as working — nothing else breaks.
 
 ## Before sharing the link
 
-- **Fill in `web/privacy.html`**: replace `REPLACE-WITH-YOUR-EMAIL` (two spots) and the "last updated" date. I wrote honest, plain-English content, but I'm not a lawyer — have someone check it against where your users actually are, especially since this app already reaches the EU (GDPR) and other markets with their own rules.
+- **Legal pages**: `web/privacy.html` and `web/terms.html` carry the contact address (whiskerwire.contact@gmail.com) and the 13 October 2026 date; change both if the address or practices change, and review them at least yearly. They are plain-English drafts, not lawyer-reviewed. Check them against where your users actually are (the app reaches the EU, so GDPR, and other markets with their own rules).
 - **Decide whether "Forget everything" is enough.** Right now it clears a person's watchlist and notes but does not delete their Supabase login itself. If you want a real "delete my account" button, that's a small addition (an admin-key call to Supabase's user-delete endpoint) — say the word and I'll add it before you launch.
 - **Test signup and login for real once your keys are in place.** I built and unit-tested every piece against mocks, and verified the gate/401/error-handling behaviour against a live server with fake credentials, but I have no way to create a real Supabase project myself, so the actual signup → email → login round trip needs one real run by you before you send the link to anyone.
