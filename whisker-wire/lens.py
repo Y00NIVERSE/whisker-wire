@@ -60,7 +60,7 @@ _BUCKETS = [(i, lab, pol, lead, re.compile(rx, re.I)) for i, lab, pol, lead, rx 
 _AHEAD = re.compile(r"\b(expects?|expected to|expecting|anticipat\w+|forecast\w*|projects?|projected|projecting|guid(?:ance|ing)|outlook|"
                     r"targets?|targeting|plans? to|aims? to|intends?|on track|poised|set to|will|going forward|looking ahead|"
                     r"(?:next|coming|upcoming) (?:quarter|year|fiscal year|twelve months|12 months|few quarters)|"
-                    r"for the (?:full|remainder|rest)|remainder of|should (?:be|see|benefit|improve))\b", re.I)
+                    r"remainder of|should (?:be|see|benefit|improve))\b", re.I)
 # "second half" and "third quarter of 2025" are not listed above on purpose: they are as often past as future, and a
 # year later than the document's own date already marks the future ("fourth quarter of 2026" in a 2025 report).
 _BACK = re.compile(r"\b(increased|decreased|grew|rose|fell|declined|dropped|improved|reported|recorded|delivered|achieved|generated|totale?d|"
@@ -174,22 +174,39 @@ def _headline_value(s, key):
     return v[0]
 
 
+_YEAR_KIND = re.compile(r"\b(?:full[- ]year|fiscal year|fiscal 20\d\d|for the year|annual|year ended|12 months|twelve months)\b", re.I)
+_QUARTER_KIND = re.compile(r"\b(?:quarter|q[1-4]|three months)\b", re.I)
+
+
+def _period_kind(s):
+    """A year or a quarter: guidance for the year must be set against the year's figure, never a quarter's.
+    'Quarter' wins when both appear: "the first quarter of fiscal year 2027" is a quarter, dated by its year."""
+    if _QUARTER_KIND.search(s):
+        return "quarter"
+    return "year" if _YEAR_KIND.search(s) else None
+
+
 def _implied(fwd, back_items):
     """Guidance against the last reported figure for the same thing: 'revenue guided to $108B vs $89B reported'.
     The reported figure is the largest one found for that metric, so a segment is not mistaken for the total.
     Rough by nature: the periods may differ (a quarter against a year), so the page says to check."""
     key = _metric_key(fwd["text"])
-    if not key or key in ("free cash flow",):
+    # profit lines can be losses, and a loss written without its sign pairs a loss with a profit: stay with the
+    # stable ones (sales and margins), and never pair a sentence that talks about a loss
+    if not key or key not in ("revenue",) + _MARGINS or re.search(r"\bloss(?:es)?\b", fwd["text"], re.I):
         return None
     f = _headline_value(fwd["text"], key)
-    cands = [(v, b) for b in back_items if _metric_key(b["text"]) == key and (v := _headline_value(b["text"], key)) is not None]
+    kind = _period_kind(fwd["text"])
+    cands = [(v, b) for b in back_items if _metric_key(b["text"]) == key and not re.search(r"\bloss(?:es)?\b", b["text"], re.I)
+             and not (kind and _period_kind(b["text"]) and _period_kind(b["text"]) != kind)
+             and (v := _headline_value(b["text"], key)) is not None]
     if f is None or not cands:
         return None
     if key in _MARGINS:
         v, b = max(cands, key=lambda c: c[1]["score"])
         return {"metric": key, "now": f, "then": v, "delta": round(f - v, 1), "unit": "pp", "from": b["text"][:90]}
     v, b = max(cands, key=lambda c: c[0])
-    if v <= 0 or not 0.3 <= f / v <= 3:
+    if v <= 0 or not 0.3 <= f / v <= 3 or abs(f / v - 1) < 0.001:
         return None
     return {"metric": key, "now": f, "then": v, "delta": round((f / v - 1) * 100, 1), "unit": "%", "from": b["text"][:90]}
 

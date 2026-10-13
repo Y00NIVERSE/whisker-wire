@@ -359,9 +359,11 @@ _INTENTS = {
     "value": re.compile(r"\b(undervalued|overvalued|cheap|expensive|valuation|fair value|p/?e)\b", re.I),
     "howto": re.compile(r"\b(how (do|can|should) i|how to|beginner|start(ing)? (investing|trading)|first (stock|investment)|where (do|should) i|best way)\b", re.I),
     "report": re.compile(r"\b(annual reports?|10-?k|20-?f|financial statements?|financials|balance sheet|income statement|cash flow|"
-                         r"filings?|8-?k|latest developments?|developments|what changed|risk factors|revenue growth|profit margins?|debt)\b", re.I),
+                         r"filings?|8-?k|latest developments?|developments|what changed|risk factors|revenue growth|profit margins?|debt|"
+                         r"earnings (?:release|report)|latest results|quarterly results|guidance|outlook)\b", re.I),
 }
 _ANNUAL_Q = re.compile(r"\b(annual reports?|10-?k|20-?f|risk factors|what changed|red flags?)\b", re.I)
+_RELEASE_Q = re.compile(r"\b(earnings|results|guidance|outlook|quarterly|looking ahead|expects?)\b", re.I)
 
 
 def glossary_terms(q, limit=2):
@@ -470,7 +472,22 @@ def _quietly(fn, *a):
         return None
 
 
-def company_blocks(name, co, annual, asked_annual):
+def release_blocks(release):
+    """The latest earnings release through Tick's profit lens: what it says is coming, and which way the signals lean."""
+    lz = (release or {}).get("lens") or {}
+    if not release or not release.get("available") or not lz.get("available"):
+        return [], []
+    blocks = []
+    ahead = [i["text"] for i in lz["looking_ahead"] if i.get("strong")][:3]
+    if ahead:
+        blocks.append({"type": "ul", "title": f"What the latest earnings release says is coming (filed {release['date']}; promises that can miss)", "items": ahead})
+    pts = [p["text"] for p in lz["read"]["points"] if p["tone"] != "info"][:3]
+    if pts:
+        blocks.append({"type": "ul", "title": "Tick's profit lens on that release", "items": pts})
+    return blocks, [{"title": release["title"][:100], "url": release["url"], "engine": "SEC EDGAR"}]
+
+
+def company_blocks(name, co, annual, asked_annual, release=None):
     """What the company's own SEC filings say, as answer blocks. Everything here is a rule applied to the filing
     text or numbers (see company.py), not an opinion."""
     if co is None:
@@ -515,7 +532,8 @@ def company_blocks(name, co, annual, asked_annual):
                 blocks.append({"type": "ul", "title": "Tick's profit lens", "items": pts})
     elif asked_annual:
         blocks.append({"type": "p", "text": "Reading a whole annual report takes a little while the first time. Ask again in a minute and it will be ready, or open the Company page."})
-    return blocks, links
+    rb, rl = release_blocks(release)
+    return blocks + rb, links + rl
 
 
 def retrieve(q, market, entities, want):
@@ -545,6 +563,8 @@ def retrieve(q, market, entities, want):
         jobs["company"] = lambda: _quietly(company.get_company, sym)
         if _ANNUAL_Q.search(q):   # slow the first time (a whole filing); it keeps going after the deadline, so asking again is instant
             jobs["annual"] = lambda: _quietly(company.get_annual_report, sym)
+        if _RELEASE_Q.search(q):  # the latest results announcement: small, so usually inside the deadline
+            jobs["release"] = lambda: _quietly(company.get_earnings_release, sym)
     names = list(jobs)
     res = engine.run_parallel(lambda n: (n, jobs[n]()), names, deadline=9, workers=4)
     ctx = {n: v for r in res if r for n, v in [r]}
@@ -619,7 +639,7 @@ def compose_entity(q, market, ents, ctx, want, mem=None):
         blocks.append({"type": "p", "text": "Yahoo did not give me live numbers for it just now, so check the price before you rely on anything below."})
     extra_sources = []
     if "report" in want:
-        more, extra_sources = company_blocks(e["name"], ctx.get("company"), ctx.get("annual"), bool(_ANNUAL_Q.search(q)))
+        more, extra_sources = company_blocks(e["name"], ctx.get("company"), ctx.get("annual"), bool(_ANNUAL_Q.search(q)), ctx.get("release"))
         blocks += more
     hits = wire_hits(market, ents)
     news = ctx["news"]
@@ -858,6 +878,11 @@ def build_context(market, ents, ctx, sources, mem=None):
             if lz.get("available"):
                 lines += ["ANNUAL REPORT LOOKING AHEAD: " + i["text"] for i in lz["looking_ahead"] if i.get("strong")][:3]
                 lines += ["PROFIT LENS (" + lz["read"]["lean"] + "): " + p["text"] for p in lz["read"]["points"][:3]]
+        rel = ctx.get("release") or {}
+        rz = rel.get("lens") or {}
+        if rel.get("available") and rz.get("available"):
+            lines += [f"EARNINGS RELEASE {rel['date']} LOOKING AHEAD: " + i["text"] for i in rz["looking_ahead"] if i.get("strong")][:3]
+            lines += [f"EARNINGS RELEASE PROFIT LENS ({rz['read']['lean']}): " + p["text"] for p in rz["read"]["points"][:3]]
     elif co and (co.get("financials") or {}).get("read"):   # not a US filer: numbers only, from Yahoo
         lines.append("ANNUAL NUMBERS (Yahoo Finance, unofficial; annual report text not available): " + " | ".join(r["text"] for r in co["financials"]["read"][:5]))
     lines.append("SOURCES:")
