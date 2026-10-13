@@ -506,12 +506,29 @@ class LinkedPages(unittest.TestCase):
         self.assertTrue(out["linked"] and out["lens"]["available"])
         self.assertEqual(get.call_args[0][0], "https://example.com/results.html")
 
-    def test_a_pdf_is_declined_with_the_way_forward(self):
+    def test_a_pdf_link_is_read_like_any_other_page(self):
+        import zlib
+        text = b"".join(b"BT /F1 12 Tf 72 %d Td (Revenue rose %d%% to $2.%d billion in the quarter compared with last year, helped by strong demand for its products.) Tj ET " % (700 - i * 14, i + 5, i) for i in range(8))
+        data = zlib.compress(text)
+        head = (b"%PDF-1.5\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+                b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+                b"4 0 obj\n<< /Type /Font /Subtype /Type1 /Encoding /WinAnsiEncoding >>\nendobj\n5 0 obj\n")
+        pdf = head + b"<< /Length " + str(len(data)).encode() + b" /Filter /FlateDecode >>\nstream\n" + data + b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n"
+        with mock.patch.object(engine, "http_get", return_value=(pdf, "utf-8")):
+            out = company.analyze_text("https://links.sgx.com/1.0.0/corporate-announcements/X/Y")
+        self.assertTrue(out["linked"] and out["lens"]["available"])
+        self.assertGreater(out["words"], 60)
+
+    def test_a_broken_pdf_is_declined_with_the_way_forward(self):
         with mock.patch.object(engine, "http_get", return_value=(b"%PDF-1.7 binary", "utf-8")):
             with self.assertRaises(ValueError) as cm:
-                company.analyze_text("https://links.sgx.com/1.0.0/corporate-announcements/X/Y")
-        self.assertIn("PDF", str(cm.exception))
+                company.analyze_text("https://example.com/results.pdf")
         self.assertIn("paste", str(cm.exception))
+
+    def test_google_wrappers_around_a_link_are_unwrapped_before_fetching(self):
+        with mock.patch.object(engine, "http_get", return_value=(self.PAGE.encode(), "utf-8")) as get:
+            company.analyze_text("https://www.google.com/url?sa=t&url=https%3A%2F%2Fexample.com%2Fresults.html&usg=abc")
+        self.assertEqual(get.call_args[0][0], "https://example.com/results.html")
 
     def test_a_page_with_no_readable_text_is_declined(self):
         with mock.patch.object(engine, "http_get", return_value=(b"<html><body><div id=app></div><script>x()</script></body></html>", "utf-8")):
