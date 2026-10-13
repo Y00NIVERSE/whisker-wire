@@ -643,18 +643,126 @@ def _unwrap(text):
     return out
 
 
+def _fetch_page_lines(url):
+    """A link a person gave Tick, read as a web page. The same safety as the article reader: only public http(s)
+    addresses on standard ports (engine.http_get checks that and pins the connection). A PDF cannot be read
+    without a PDF library, so Tick says so rather than showing garbage."""
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    try:
+        if host == "sec.gov" or host.endswith(".sec.gov"):
+            if not engine.sec_agent():
+                raise ValueError("Reading SEC pages needs the site's SEC identity, which is not set up. Paste the text instead.")
+            raw = engine._sec_get(url, max_bytes=6_000_000, timeout=25)      # the SEC wants its own identity, not a browser's
+        else:
+            raw, _ = engine.http_get(url, timeout=25, max_bytes=6_000_000)
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"That site refused automated access (HTTP {e.code}). Open the page, copy the text, and paste it here instead.")
+    except (urllib.error.URLError, OSError):
+        raise ValueError("Tick could not open that link. Check it, or paste the text instead.")
+    if raw[:5] == b"%PDF-":
+        raise ValueError("That link is a PDF, which Tick cannot read. Open it, copy the text you want read, and paste it here instead.")
+    lines = [ln for ln in doc_lines(_decode(raw)) if ln.strip()]
+    if sum(len(x) for x in lines) < 500:
+        raise ValueError("Tick could not find readable text at that link (it may need a login, or load its text with scripts). Paste the text instead.")
+    return lines
+
+
 def analyze_text(text):
-    """The same red-flag and 'why it moved' reading, over text a person pasted from an annual report. This is how
-    companies on exchanges with no free filings feed (Singapore, Hong Kong, London, ...) get read: the person
-    supplies the text, so nothing here fetches anything."""
+    """The same red-flag and 'why it moved' reading, over text a person pasted from an annual report or results
+    announcement, or over a web page they linked to. This is how companies on exchanges with no free filings feed
+    (Singapore, Hong Kong, London, ...) get read: the person supplies the text or the link."""
     text = (text or "").strip()[:MAX_PASTE]
+    if re.fullmatch(r"https?://\S+", text):
+        lines = _fetch_page_lines(text)
+        joined = "\n".join(lines)[:MAX_PASTE]
+        return {"available": True, "pasted": True, "linked": True, "words": len(joined.split()), "flags": scan_flags(joined),
+                "drivers": drivers(joined), "sections": {"risk": None, "mdna": None}, "prior": None, "new_risks": None,
+                "lens": lens.analyze(lines)}
     if len(text) < 500:
-        raise ValueError("Paste a few paragraphs of the report first, for example its Risk Factors or Management Discussion section.")
+        raise ValueError("Paste a few paragraphs of the report first, for example its results announcement or its Risk Factors or Management Discussion section, or a link to a web page.")
     lines = _unwrap(text)
     joined = "\n".join(lines)
     return {"available": True, "pasted": True, "words": len(joined.split()), "flags": scan_flags(joined),
             "drivers": drivers(joined), "sections": {"risk": None, "mdna": None}, "prior": None, "new_risks": None,
             "lens": lens.analyze(lines)}
+
+
+# ---------------------------------------------------------------- the latest earnings release (US)
+_EXHIBIT = re.compile(r"^/Archives/edgar/data/\d+/\d+/[\w.\-]+\.html?$", re.I)
+
+
+def _exhibit_href(index_html):
+    """The press release is exhibit 99.1 to the 8-K. On the filing's index page it is a table row whose type is
+    EX-99.1 (or another EX-99.x); EX-99.1 wins. Only a path inside the SEC's own archive is ever returned."""
+    best = None
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", index_html, re.S | re.I):
+        t = re.search(r">\s*(EX-99(?:\.\d+)?)\s*<", tr, re.I)
+        m = re.search(r'href="(?:/ix\?doc=)?(/Archives/edgar/data/[^"]+)"', tr, re.I)
+        if t and m and _EXHIBIT.match(m.group(1)):
+            rank = 0 if t.group(1).upper() == "EX-99.1" else 1
+            if best is None or rank < best[0]:
+                best = (rank, m.group(1))
+    return best[1] if best else None
+
+
+_EX_HEADER = re.compile(r"^EX-99(?:\.\d+)?\s+\d+\s+\S+\.html?\s*(?:EX-99(?:\.\d+)?\s*)?", re.I)
+
+
+def _strip_exhibit_header(lines):
+    """EDGAR's rendering of an exhibit starts with 'EX-99.1 2 file.htm EX-99.1': page furniture, not the release."""
+    out = [_EX_HEADER.sub("", ln) for ln in lines[:6]] + lines[6:]
+    return [ln for ln in out if ln.strip()]
+
+
+def _release_title(lines):
+    cleaned = [lens._clean(ln) for ln in lines[:14]]
+    for ln in cleaned:
+        if 20 <= len(ln) <= 160 and re.search(r"\b(?:reports?|announces?|results|earnings)\b", ln, re.I):
+            return ln
+    return next((ln[:140] for ln in cleaned if len(ln) >= 20), "Earnings release")
+
+
+def get_earnings_release(symbol):
+    """The company's own latest results announcement (8-K item 2.02, exhibit 99.1), read by Tick's profit lens: the
+    most useful forecasting document there is, because the guidance and the reasons are in it, first-hand."""
+    s = _clean_symbol(symbol)
+    if _EXCHANGE.search(s):
+        return {"configured": True, "supported": False, "symbol": s, "market": _SUFFIX_MARKET.get(_EXCHANGE.search(s).group(1))}
+    if not engine.sec_agent():
+        return {"configured": False}
+    try:
+        hit = lookup(s)
+        if not hit:
+            return {"configured": True, "supported": False, "symbol": s}
+        cik, _ = hit
+        rows = [r for r in _recent(_submissions(cik)) if r["form"] in ("8-K", "8-K/A") and "2.02" in (r["items"] or "")]
+        if not rows:
+            return {"configured": True, "supported": True, "available": False,
+                    "reason": "No earnings release (an 8-K with item 2.02) in the SEC's recent filings for this company."}
+        def read_one(r):
+            href = _exhibit_href(_decode(engine._sec_get(_index_url(cik, r), max_bytes=600_000)))
+            if not href:
+                return {"available": False, "reason": "The filing has no press-release exhibit that Tick could find.", "index": _index_url(cik, r), "date": r["filingDate"]}
+            url = "https://www.sec.gov" + href
+            lines = _strip_exhibit_header(doc_lines(_decode(engine._sec_get(url, max_bytes=4_000_000, timeout=40))))
+            return {"available": True, "date": r["filingDate"], "title": _release_title(lines), "url": url,
+                    "index": _index_url(cik, r), "words": sum(len(x.split()) for x in lines), "lens": lens.analyze(lines)}
+
+        def run():
+            # Some companies file a second item-2.02 note (Tesla's production and deliveries): take the newest one that
+            # is a real results release, not a few hundred words.
+            with _HEAVY:
+                first = None
+                for r in rows[:3]:
+                    got = read_one(r)
+                    first = first or got
+                    if got.get("available") and got["words"] >= 700:
+                        return got
+                return first
+        res = engine.cached(f"release:{cik}:{rows[0]['accessionNumber']}", 7 * 86400, run)
+        return {"configured": True, "supported": True, "symbol": s, **res}
+    except urllib.error.HTTPError as e:
+        raise _sec_error(e)
 
 
 def get_annual_report(symbol):

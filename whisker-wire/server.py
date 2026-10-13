@@ -133,6 +133,11 @@ def _get_company(q, user, ip):
     return company.get_company(_company_symbol(q))
 
 
+def _get_release(q, user, ip):
+    tick_chat.rate_limit("release:" + ip, limit=15, window=600)   # an index page and a press release from the SEC per call
+    return company.get_earnings_release(_company_symbol(q))
+
+
 def _get_annual(q, user, ip):
     tick_chat.rate_limit("annual:" + ip, limit=6, window=600)     # reading a whole annual report is the heaviest call here
     return company.get_annual_report(_company_symbol(q))
@@ -184,6 +189,7 @@ ROUTES = {
     "/api/article": _get_article,
     "/api/company": _get_company,
     "/api/annual-report": _get_annual,
+    "/api/earnings-release": _get_release,
     "/api/auth/me": lambda q, u, ip: {"email": u["email"] if u else None, "cloud": auth.cloud_enabled(),
                                       "hosted": _hosted(), "memory": not _disabled("/api/memory")},
 }

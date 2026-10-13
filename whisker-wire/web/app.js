@@ -1180,7 +1180,27 @@ function coTop(c, sym) {
     h("h2", { class: "subhead", text: "Latest developments" }),
     h("p", { class: "small", text: "What the company itself has just told the SEC, translated out of filing code. Filings are often earlier than the news, and always first-hand." }),
     coDev(c.developments || []),
+    h("h2", { class: "subhead", text: "Latest earnings release" }),
+    h("p", { class: "small", text: "The company's own results announcement: where the guidance and the reasons are. Tick splits it into what already happened and what the company says comes next." }),
+    coRelease(c),
     h("h2", { class: "subhead", text: "Inside the annual report" }), coAnnual(c));
+}
+
+// Loads by itself: it is one small document, usually back in a second or two.
+function coRelease(c) {
+  const box = h("div", { class: "co-annual" }, h("p", { class: "small", role: "status", text: "Looking for the latest earnings release…" }));
+  const my = co.token;
+  api("/api/earnings-release?symbol=" + encodeURIComponent(c.symbol)).then((r) => { if (my === co.token) fill(box, renderRelease(r)); })
+    .catch((e) => { if (my === co.token) fill(box, h("p", { class: "empty", text: e.message })); });
+  return box;
+}
+
+function renderRelease(r) {
+  if (!r.available) return h("p", { class: "empty", text: r.reason || "No earnings release found." });
+  const l = lensEl(r.lens);
+  return h("div", {},
+    h("p", { class: "small" }, h("b", { text: r.title }), ` · filed ${r.date} · `, h("a", { href: r.url }, "open the release"), extIcon()),
+    l || h("p", { class: "small", text: (r.lens && r.lens.reason) || "Tick found no profit statements in this release." }));
 }
 
 // A company the SEC does not cover (Singapore, Hong Kong, London, ...): numbers from Yahoo, the exchange's own
@@ -1197,12 +1217,12 @@ function coOther(c, sym) {
     h("div", { class: "co-head" }, h("h2", { text: sym }), h("span", { class: "tk mono", text: mk.name })),
     h("h2", { class: "subhead", text: "What the numbers say" }), coNumbers(c),
     portals,
-    h("h2", { class: "subhead", text: "Inside the annual report" }), coPaste());
+    h("h2", { class: "subhead", text: "Results announcements and the annual report" }), coPaste());
 }
 
 function coPaste() {
   const box = h("div", { class: "co-annual" });
-  const ta = h("textarea", { id: "co-paste", rows: "7", placeholder: "Paste text from the annual report here: its Risk Factors, or its Management Discussion and Analysis…", "aria-label": "Annual report text" });
+  const ta = h("textarea", { id: "co-paste", rows: "7", placeholder: "Paste the text of a results announcement or an annual-report section here, or a link to a web page…", "aria-label": "Results announcement or annual report text, or a link" });
   const out = h("div", { role: "status" });
   const go = h("button", { class: "primary", type: "button", onclick: async () => {
     go.disabled = true; fill(out, h("p", { class: "small", text: "Tick is reading…" }));
@@ -1211,7 +1231,7 @@ function coPaste() {
     go.disabled = false;
   } }, "Scan this text");
   box.append(
-    h("p", { class: "small", text: "Tick cannot fetch this company's annual report for you, but she can read what you give her. Open the report (usually a PDF on the company's investor page or the exchange's site), copy a section, and paste it here. She looks for red-flag phrases and for what management says moved the numbers. She reads words, not meaning: it shows where to look, not a verdict." }),
+    h("p", { class: "small", text: "Tick cannot fetch this company's results announcements or annual report for you: there is no free official feed for this market that a program may read. But she can read what you give her. Open the announcement or report (a PDF on the exchange's site or the company's investor page), copy the text, and paste it here, or paste a link if it is a web page rather than a PDF. She splits it into what already happened and what the company says comes next, and looks for red flags. She reads words, not meaning: it shows where to look, not a verdict." }),
     ta, h("div", { class: "chips" }, go), out);
   return box;
 }
@@ -1277,7 +1297,7 @@ function renderAnnual(r) {
   const flag = (f) => h("li", { class: "tone tone-" + f.tone }, h("span", { class: "tone-mark", "aria-hidden": "true", text: TONE_MARK[f.tone] }),
     h("span", {}, h("b", { text: f.label }), h("blockquote", { text: "“" + f.text + "”" })));
   return h("div", {},
-    r.pasted ? h("p", { class: "small", text: `${r.words.toLocaleString()} words read from the text you pasted` })
+    r.pasted ? h("p", { class: "small", text: `${r.words.toLocaleString()} words read from ${r.linked ? "the page you linked to" : "the text you pasted"}` })
       : h("p", { class: "small" }, `${r.form} for the year ending ${r.period} · `, h("a", { href: r.url }, "open the filing"), ` · ${r.words.toLocaleString()} words read`),
     h("h3", { class: "co-h3", text: "Red flags the report states" }),
     stated.length ? h("ul", { class: "co-read" }, stated.map(flag)) : h("p", { class: "small", text: "None found. The report does not state going-concern doubt, weak financial controls, a restatement, or similar." }),

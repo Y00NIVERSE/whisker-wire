@@ -392,6 +392,160 @@ class PastedReports(unittest.TestCase):
         self.assertLessEqual(out["words"], company.MAX_PASTE // 5)
 
 
+INDEX_HTML = """<table class="tableFile"><tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+<tr><td>1</td><td>FORM 8-K</td><td><a href="/ix?doc=/Archives/edgar/data/1234/000000000126000010/acme8k.htm">acme8k.htm</a></td><td>8-K</td><td>40000</td></tr>
+<tr><td>2</td><td>PRESS RELEASE</td><td><a href="/Archives/edgar/data/1234/000000000126000010/acmeex991.htm">acmeex991.htm</a></td><td>EX-99.1</td><td>90000</td></tr>
+<tr><td>3</td><td>SLIDES</td><td><a href="/Archives/edgar/data/1234/000000000126000010/acmeex992.htm">acmeex992.htm</a></td><td>EX-99.2</td><td>90000</td></tr>
+<tr><td>4</td><td>XBRL</td><td><a href="/Archives/edgar/data/1234/000000000126000010/acme-20260630.xsd">acme.xsd</a></td><td>EX-101.SCH</td><td>5000</td></tr></table>"""
+
+RELEASE_HTML = """<html><body><p>EX-99.1 2 acmeex991.htm EX-99.1</p>
+<p>Acme Corp Reports Second Quarter 2026 Results and Raises Full Year Outlook</p>
+<p>Second-quarter revenue was $4.2 billion, up 12% from a year earlier, as demand stayed strong. Orders rose 18% and backlog reached a record $9.1 billion.</p>
+<p>Gross margin was 61.2%, down from 63.0% a year ago, as higher freight costs weighed on results.</p>
+<p>The company raised its full-year revenue outlook to between $16.4 billion and $16.8 billion, from a prior range of $16.0 billion to $16.4 billion.</p>
+<p>This press release contains forward-looking statements within the meaning of the Private Securities Litigation Reform Act of 1995.</p></body></html>"""
+
+
+class EarningsRelease(unittest.TestCase):
+    def setUp(self):
+        engine._cache.clear()
+        self.sub = {"name": "ACME CORP", "filings": {"recent": {
+            "accessionNumber": ["0000000001-26-000010", "0000000001-26-000007"],
+            "filingDate": ["2026-07-28", "2026-04-28"], "reportDate": ["", ""], "form": ["8-K", "8-K"],
+            "primaryDocument": ["acme8k.htm", "acme8k2.htm"], "items": ["2.02,9.01", "2.02,9.01"]}}}
+        self.tickers = {"0": {"cik_str": 1234, "ticker": "ACME", "title": "Acme Corp"}}
+        self.calls = []
+
+    def fake(self, url, **k):
+        self.calls.append(url)
+        if url.endswith("company_tickers.json"):
+            return json.dumps(self.tickers).encode()
+        if "submissions" in url:
+            return json.dumps(self.sub).encode()
+        if url.endswith("-index.htm"):
+            return INDEX_HTML.encode()
+        if url.endswith("acmeex991.htm"):
+            return RELEASE_HTML.encode()
+        raise AssertionError("unexpected fetch " + url)
+
+    def get(self, sym="ACME"):
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=self.fake):
+            return company.get_earnings_release(sym)
+
+    def test_exhibit_99_1_is_found_on_the_index_page_and_read_by_the_lens(self):
+        r = self.get()
+        self.assertTrue(r["available"])
+        self.assertEqual(r["date"], "2026-07-28")
+        self.assertEqual(r["url"], "https://www.sec.gov/Archives/edgar/data/1234/000000000126000010/acmeex991.htm")
+        self.assertEqual(r["title"], "Acme Corp Reports Second Quarter 2026 Results and Raises Full Year Outlook")
+        self.assertEqual(r["lens"]["read"]["lean"], "up")
+        self.assertTrue(any(i["guidance"] == "raise" for i in r["lens"]["looking_ahead"]))
+
+    def test_the_main_document_slides_and_xbrl_files_are_never_chosen(self):
+        self.assertEqual(company._exhibit_href(INDEX_HTML), "/Archives/edgar/data/1234/000000000126000010/acmeex991.htm")
+        rows = INDEX_HTML.split("\n")
+        only_slides = "\n".join(r for r in rows if "acmeex991" not in r)           # no EX-99.1 at all
+        self.assertIn("ex992", company._exhibit_href(only_slides))     # an EX-99.x is better than nothing, EX-99.1 first
+        self.assertIsNone(company._exhibit_href("<tr><td>1</td><td>FORM 8-K</td><td><a href='/Archives/edgar/data/1/2/a.htm'>a</a></td><td>8-K</td></tr>"))
+
+    def test_only_paths_inside_the_secs_archive_are_ever_fetched(self):
+        evil = '<tr><td><a href="/ix?doc=https://evil.example/x.htm">x</a></td><td>EX-99.1</td></tr><tr><td><a href="/Archives/../etc/passwd">x</a></td><td>EX-99.1</td></tr>'
+        self.assertIsNone(company._exhibit_href(evil))
+
+    def test_edgars_page_header_is_not_part_of_the_release(self):
+        lines = company._strip_exhibit_header(["EX-99.1 2 acmeex991.htm EX-99.1", "Acme Corp Reports Results", "EX-99 2 a.htm EX-99 Q2 Update"])
+        self.assertEqual(lines[0], "Acme Corp Reports Results")
+
+    def test_a_deliveries_note_is_skipped_for_the_real_results_release(self):
+        small = "<html><body><p>Thank you to all of our customers for a record quarter of deliveries and production.</p></body></html>"
+        self.sub["filings"]["recent"]["accessionNumber"] = ["0000000001-26-000011", "0000000001-26-000010"]
+        self.sub["filings"]["recent"]["filingDate"] = ["2026-10-02", "2026-07-28"]
+        original = self.fake
+        big = RELEASE_HTML.replace("</body>", "<p>" + "Revenue rose 5% compared with last year on strong demand. " * 120 + "</p></body>")   # a real-sized release
+
+        def fake(url, **k):
+            if "000000000126000011" in url and url.endswith("-index.htm"):
+                return INDEX_HTML.replace("000000000126000010", "000000000126000011").encode()
+            if "000000000126000011" in url and url.endswith("acmeex991.htm"):
+                return small.encode()
+            if "000000000126000010" in url and url.endswith("acmeex991.htm"):
+                return big.encode()
+            return original(url, **k)
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=fake):
+            r = company.get_earnings_release("ACME")
+        self.assertEqual(r["date"], "2026-07-28")
+
+    def test_no_item_2_02_filing_says_so(self):
+        self.sub["filings"]["recent"]["items"] = ["5.02", "7.01"]
+        r = self.get()
+        self.assertFalse(r["available"])
+        self.assertIn("No earnings release", r["reason"])
+
+    def test_singapore_and_other_markets_are_not_fetched_automatically(self):
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), mock.patch.object(engine, "_sec_get", side_effect=AssertionError("no")):
+            r = company.get_earnings_release("D05.SI")
+        self.assertEqual((r["supported"], r["market"]), (False, "sg"))
+
+    def test_the_sec_identity_is_needed(self):
+        with mock.patch.object(engine, "sec_agent", return_value=""):
+            self.assertEqual(company.get_earnings_release("ACME"), {"configured": False})
+
+    def test_a_release_is_read_once_then_remembered(self):
+        self.get()
+        n = len(self.calls)
+        self.get()
+        self.assertEqual(len([c for c in self.calls[n:] if c.endswith("acmeex991.htm")]), 0)
+
+
+class LinkedPages(unittest.TestCase):
+    PAGE = "<html><body>" + "".join(f"<p>Revenue rose {i + 5}% to $2.{i} billion in the quarter compared with last year, helped by strong demand for its products and services.</p>" for i in range(8)) + "</body></html>"
+
+    def test_a_link_is_fetched_and_read_like_pasted_text(self):
+        with mock.patch.object(engine, "http_get", return_value=(self.PAGE.encode(), "utf-8")) as get:
+            out = company.analyze_text("https://example.com/results.html")
+        self.assertTrue(out["linked"] and out["lens"]["available"])
+        self.assertEqual(get.call_args[0][0], "https://example.com/results.html")
+
+    def test_a_pdf_is_declined_with_the_way_forward(self):
+        with mock.patch.object(engine, "http_get", return_value=(b"%PDF-1.7 binary", "utf-8")):
+            with self.assertRaises(ValueError) as cm:
+                company.analyze_text("https://links.sgx.com/1.0.0/corporate-announcements/X/Y")
+        self.assertIn("PDF", str(cm.exception))
+        self.assertIn("paste", str(cm.exception))
+
+    def test_a_page_with_no_readable_text_is_declined(self):
+        with mock.patch.object(engine, "http_get", return_value=(b"<html><body><div id=app></div><script>x()</script></body></html>", "utf-8")):
+            with self.assertRaises(ValueError):
+                company.analyze_text("https://example.com/app")
+
+    def test_sec_gov_links_use_the_sec_identity_not_a_browsers(self):
+        with mock.patch.object(engine, "sec_agent", return_value="T t@e.com"), \
+                mock.patch.object(engine, "_sec_get", return_value=self.PAGE.encode()) as sec, \
+                mock.patch.object(engine, "http_get", side_effect=AssertionError("must go through the SEC identity")):
+            out = company.analyze_text("https://www.sec.gov/Archives/edgar/data/1/2/x.htm")
+        self.assertTrue(out["lens"]["available"])
+        sec.assert_called_once()
+
+    def test_sec_links_without_an_identity_say_why(self):
+        with mock.patch.object(engine, "sec_agent", return_value=""):
+            with self.assertRaises(ValueError) as cm:
+                company.analyze_text("https://www.sec.gov/Archives/edgar/data/1/2/x.htm")
+        self.assertIn("SEC identity", str(cm.exception))
+
+    def test_a_site_that_refuses_robots_is_explained(self):
+        import urllib.error
+        err = urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+        with mock.patch.object(engine, "http_get", side_effect=err):
+            with self.assertRaises(ValueError) as cm:
+                company.analyze_text("https://example.com/results")
+        self.assertIn("HTTP 403", str(cm.exception))
+        self.assertIn("paste", str(cm.exception))
+
+    def test_private_addresses_are_refused_even_when_a_person_types_them(self):
+        with self.assertRaises(ValueError):
+            company.analyze_text("http://169.254.169.254/latest/meta-data/")     # the real SSRF guard, not a mock
+
+
 class Brief(unittest.TestCase):
     def setUp(self):
         engine._cache.clear()
@@ -548,6 +702,27 @@ class AskTick(unittest.TestCase):
         self.assertNotIn("will depend on many factors", text)       # a bare "will" is not an outlook
         self.assertIn("outlook itself was raised", text)
         self.assertNotIn("moved the right way", text)               # the neutral line is left out of the short answer
+
+    def test_the_latest_earnings_release_reaches_the_answer_with_its_source(self):
+        release = {"available": True, "date": "2026-07-28", "title": "Acme Reports Second Quarter Results", "url": "https://www.sec.gov/Archives/edgar/data/1/2/x.htm",
+                   "lens": {"available": True, "read": {"lean": "up", "points": [
+                       {"tone": "good", "text": "The outlook itself was raised: that is the strongest single signal in the text."},
+                       {"tone": "good", "text": "Guidance implies revenue of about $108.0B, up 12.3% from the last reported $96.2B. Rough: check both numbers cover the periods you think."}]},
+                       "looking_ahead": [{"text": "Revenue is expected to be $108.0 billion, plus or minus 2%.", "strong": True}]}}
+        blocks, links = tick_chat.company_blocks("Acme", self.CO, None, False, release)
+        text = json.dumps(blocks)
+        self.assertIn("filed 2026-07-28", text)
+        self.assertIn("Revenue is expected to be $108.0 billion", text)
+        self.assertIn("implies revenue of about $108.0B", text)
+        self.assertTrue(any(l["url"].endswith("x.htm") for l in links))
+
+    def test_a_release_with_nothing_to_say_adds_nothing(self):
+        self.assertEqual(tick_chat.release_blocks({"available": True, "lens": {"available": False}}), ([], []))
+        self.assertEqual(tick_chat.release_blocks(None), ([], []))
+
+    def test_earnings_questions_are_recognised_as_report_questions(self):
+        for q in ("What is Nvidia's latest earnings release saying?", "What's Ford's guidance?", "How is Apple's outlook for next quarter?"):
+            self.assertIn("report", tick_chat.intents(q), q)
 
     def test_slow_annual_report_is_explained_not_hidden(self):
         blocks, _ = tick_chat.company_blocks("Acme", self.CO, None, True)
