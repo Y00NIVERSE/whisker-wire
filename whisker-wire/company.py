@@ -24,7 +24,8 @@ from html.parser import HTMLParser
 
 import engine
 import lens
-from textutil import sentences
+import pdftext
+from textutil import sentences, unwrap_lines
 
 DATA = "https://data.sec.gov"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -623,45 +624,30 @@ MAX_PASTE = 400_000
 
 
 def _unwrap(text):
-    """Text copied out of a PDF is hard-wrapped every ~80 characters, which would cut every sentence in half.
-    Join lines unless the previous one ended a sentence; blank lines stay as paragraph breaks."""
-    out, buf = [], ""
-    for raw in text.replace("\r", "").split("\n"):
-        line = raw.strip()
-        if not line:
-            if buf:
-                out.append(buf)
-            buf = ""
-        elif buf and not re.search(r"[.!?:”\"]$", buf):
-            buf += " " + line
-        else:
-            if buf:
-                out.append(buf)
-            buf = line
-    if buf:
-        out.append(buf)
-    return out
+    """Text copied out of a PDF is hard-wrapped every ~80 characters, which would cut every sentence in half."""
+    return unwrap_lines(text.replace("\r", "").split("\n"))
 
 
 def _fetch_page_lines(url):
-    """A link a person gave Tick, read as a web page. The same safety as the article reader: only public http(s)
-    addresses on standard ports (engine.http_get checks that and pins the connection). A PDF cannot be read
-    without a PDF library, so Tick says so rather than showing garbage."""
+    """A link a person gave Tick, read as a web page or a PDF. The same safety as the article reader: only public
+    http(s) addresses on standard ports (engine.http_get checks that and pins the connection). A PDF is read by
+    pdftext; one it cannot read (scanned, encrypted) raises an error that says to paste the text instead."""
+    url = engine.normalize_link(url)
     host = (urllib.parse.urlparse(url).hostname or "").lower()
     try:
         if host == "sec.gov" or host.endswith(".sec.gov"):
             if not engine.sec_agent():
                 raise ValueError("Reading SEC pages needs the site's SEC identity, which is not set up. Paste the text instead.")
-            raw = engine._sec_get(url, max_bytes=6_000_000, timeout=25)      # the SEC wants its own identity, not a browser's
+            raw = engine._sec_get(url, max_bytes=pdftext.MAX_BYTES, timeout=40)      # the SEC wants its own identity, not a browser's
         else:
-            raw, _ = engine.http_get(url, timeout=25, max_bytes=6_000_000)
+            raw, _ = engine.http_get(url, timeout=40, max_bytes=pdftext.MAX_BYTES)
     except urllib.error.HTTPError as e:
         raise ValueError(f"That site refused automated access (HTTP {e.code}). Open the page, copy the text, and paste it here instead.")
     except (urllib.error.URLError, OSError):
         raise ValueError("Tick could not open that link. Check it, or paste the text instead.")
     if raw[:5] == b"%PDF-":
-        raise ValueError("That link is a PDF, which Tick cannot read. Open it, copy the text you want read, and paste it here instead.")
-    lines = [ln for ln in doc_lines(_decode(raw)) if ln.strip()]
+        return unwrap_lines(pdftext.extract(raw))        # a PdfError is a ValueError that already says what to do next
+    lines = [ln for ln in doc_lines(_decode(raw[:6_000_000])) if ln.strip()]
     if sum(len(x) for x in lines) < 500:
         raise ValueError("Tick could not find readable text at that link (it may need a login, or load its text with scripts). Paste the text instead.")
     return lines

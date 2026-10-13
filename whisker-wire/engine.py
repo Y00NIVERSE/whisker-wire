@@ -20,8 +20,10 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 
+import pdftext
 import track
 from markets import MARKETS, valid_market
+from textutil import unwrap_lines
 from signals import SIGNALS, MAINSTREAM, TICKER_STOP
 
 ROOT = Path(__file__).parent
@@ -903,10 +905,45 @@ def resolve_google_news(url):
     return cached("gn:" + gid, 3600, run)
 
 
+_GOOGLE_HOSTS = {"google.com", "www.google.com", "docs.google.com", "drive.google.com"}
+
+
+def normalize_link(url):
+    """Links people copy out of Google are often wrappers: a search result's redirect (google.com/url?q=...), the
+    Docs viewer (docs.google.com/viewer?url=...) or a Drive share page (drive.google.com/file/d/ID/view). Unwrap them to
+    the document itself. Nothing else is changed, and the result still goes through the same SSRF guard."""
+    u = urllib.parse.urlparse((url or "").strip())
+    host = (u.hostname or "").lower()
+    if host not in _GOOGLE_HOSTS:
+        return url
+    q = urllib.parse.parse_qs(u.query)
+    if host in ("google.com", "www.google.com") and u.path == "/url":
+        t = (q.get("url") or q.get("q") or [""])[0]
+        return t if t.startswith(("http://", "https://")) else url
+    if host == "docs.google.com" and u.path.startswith("/viewer"):
+        t = (q.get("url") or [""])[0]
+        return t if t.startswith(("http://", "https://")) else url
+    if host == "drive.google.com":
+        m = re.match(r"^/file/d/([\w-]{10,})", u.path) or None
+        fid = m.group(1) if m else (q.get("id") or [""])[0]
+        if fid and re.fullmatch(r"[\w-]{10,}", fid):
+            return f"https://drive.google.com/uc?export=download&id={fid}"
+    return url
+
+
+def _article_from_pdf(url, data):
+    raw = pdftext.extract(data)
+    title = next((ln for ln in raw if 15 <= len(ln) <= 140), "")      # from the lines as printed: a heading has no full stop to end it on
+    paras = [p for p in unwrap_lines(raw) if len(p) >= 40][:400]
+    if not paras:
+        raise ValueError("Could not extract readable text from that PDF. Paste the text instead.")
+    return {"url": url, "title": clean_text(title)[:200], "paragraphs": paras}
+
+
 def get_article(url):
-    url = resolve_google_news(url)
+    url = normalize_link(resolve_google_news(url))
     try:
-        data, cs = http_get(url, max_bytes=2_500_000, timeout=15)
+        data, cs = http_get(url, max_bytes=pdftext.MAX_BYTES, timeout=30)
     except urllib.error.HTTPError as e:
         if e.code != 429:
             raise
@@ -918,7 +955,10 @@ def get_article(url):
         except (TypeError, ValueError):
             pass
         time.sleep(wait)
-        data, cs = http_get(url, max_bytes=2_500_000, timeout=15)
+        data, cs = http_get(url, max_bytes=pdftext.MAX_BYTES, timeout=30)
+    if data[:5] == b"%PDF-":
+        return _article_from_pdf(url, data)
+    data = data[:2_500_000]                       # web pages keep their old limit; only a PDF may be large
     p = _Extract()
     p.feed(data.decode(cs, "replace"))
     paras = (p.p_art if len(p.p_art) >= 3 else p.p_all)[:200]

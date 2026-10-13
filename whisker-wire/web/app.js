@@ -1231,7 +1231,7 @@ function coPaste() {
     go.disabled = false;
   } }, "Scan this text");
   box.append(
-    h("p", { class: "small", text: "Tick cannot fetch this company's results announcements or annual report for you: there is no free official feed for this market that a program may read. But she can read what you give her. Open the announcement or report (a PDF on the exchange's site or the company's investor page), copy the text, and paste it here, or paste a link if it is a web page rather than a PDF. She splits it into what already happened and what the company says comes next, and looks for red flags. She reads words, not meaning: it shows where to look, not a verdict." }),
+    h("p", { class: "small", text: "Tick cannot fetch this company's results announcements or annual report for you: there is no free official feed for this market that a program may read. But she can read what you give her. Paste a link to the announcement or report, a web page or a PDF (a link from Google Search or Google Drive works too), or open it, copy the text and paste that. A PDF that is a scan, locked with a password or built oddly cannot be read from a link; pasting its text always works. She splits it into what already happened and what the company says comes next, and looks for red flags. She reads words, not meaning: it shows where to look, not a verdict." }),
     ta, h("div", { class: "chips" }, go), out);
   return box;
 }
