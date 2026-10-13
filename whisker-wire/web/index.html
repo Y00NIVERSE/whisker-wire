@@ -175,6 +175,7 @@
         <h1>Stocks the market has marked down, with the reasons to buy and the ways it goes wrong.</h1>
         <p class="lede">Ranked by a transparent 0 to 100 score built from discount to the 52-week high, forward earnings, book value, analyst view and unusual volume. Cheap is a question, not an answer.</p>
       </div>
+      <p class="risk-note">A low price is not a reason to buy: scores come from simple rules on unofficial, sometimes delayed data, are not recommendations, and cannot see what the market knows. Past performance does not guarantee future results, and you can lose money. Not financial advice.</p>
       <div class="chips" id="radar-filters" role="group" aria-label="Filter radar"></div>
       <div class="radar" id="radar-list"></div>
       <nav class="pager" id="radar-pager" aria-label="Value Radar pages" hidden></nav>
@@ -201,6 +202,7 @@
         <button class="primary" type="submit">Look up</button>
       </form>
       <div class="chips" id="co-chips" aria-label="Try one"></div>
+      <p class="risk-note">These briefs read public filings and figures with simple rules and show where to look. They are not advice or a verdict on the company, figures may be unofficial or wrong, and past results do not guarantee future ones. Investing carries risk. Not financial advice.</p>
       <div id="company-body"></div>
     </div>
 
@@ -230,6 +232,18 @@
     <p class="fine">Education, not advice. Data comes from public feeds and can be delayed or wrong. No ads and no tracking, and this app does not log what you read.</p>
   </aside>
 </main>
+
+<footer class="site-foot">
+  <div>
+    <nav aria-label="Legal and contact">
+      <a href="/terms.html">Terms of use</a>
+      <a href="/privacy.html">Privacy policy</a>
+      <a href="mailto:whiskerwire.contact@gmail.com">Contact</a>
+    </nav>
+    <p><strong>Not financial advice.</strong> Whisker Wire is for education only and is not a licensed financial adviser; nothing here is a recommendation to buy or sell. Investing carries risk, including loss of the money you put in, and past performance does not guarantee future results. Data comes from public sources, is sometimes unofficial or delayed, and can be wrong. News headlines belong to their publishers.</p>
+    <p>&copy; 2026 Whisker Wire. Made in Singapore. No ads, no trackers, no cookies unless you log in.</p>
+  </div>
+</footer>
 
 <button class="fab" id="tick-fab" aria-label="Open Tick, your finance helper" aria-expanded="false" aria-controls="tick-pop">
   <span class="fab-cat" data-tick="mini" aria-hidden="true"></span>
@@ -290,7 +304,7 @@
     <p class="fine">At least 8 characters.</p>
     <label class="switch auth-check"><input type="checkbox" id="su-news"><span>Send me the occasional email newsletter</span></label>
     <button class="primary" type="submit">Create free account</button>
-    <p class="fine">By continuing you agree to the <a href="/privacy.html">privacy policy</a>. No credit card, ever.</p>
+    <p class="fine">By continuing you agree to the <a href="/terms.html">terms</a> and the <a href="/privacy.html">privacy policy</a>. No credit card, ever.</p>
     <p class="auth-msg" role="status" aria-live="polite"></p>
   </form>
 

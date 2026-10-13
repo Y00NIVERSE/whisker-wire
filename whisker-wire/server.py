@@ -227,6 +227,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        if _hosted():
+            self.send_header("Strict-Transport-Security", "max-age=31536000")     # a public site is HTTPS only
         for c in getattr(self, "_set_cookies", None) or []:
             self.send_header("Set-Cookie", c)
         self.end_headers()

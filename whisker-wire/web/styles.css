@@ -733,3 +733,18 @@ body.reader-open .fab, body.reader-open .tickpop { display: none; }   /* the rea
 .lens .facts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .tagx.tag-bull { color: var(--bull); } .tagx.tag-bear { color: var(--bear); }
 @media (max-width: 760px) { .lens-cols { grid-template-columns: 1fr; } }
+
+/* ---------- legal pages and the site footer (no inline styles: the CSP forbids them) ---------- */
+.legal { max-width: 68ch; margin: 0 auto; padding: 48px 24px 80px; }
+.legal h1 { font: 800 34px/1.1 var(--f-display); letter-spacing: -.02em; margin-bottom: 8px; }
+.legal h2 { font: 800 20px/1.25 var(--f-display); margin-top: 28px; margin-bottom: 8px; }
+.legal p, .legal li { font: 400 17px/1.65 var(--f-read); }
+.legal p + p { margin-top: 12px; }
+.legal ul { padding-left: 20px; list-style: disc; display: grid; gap: 8px; margin-top: 8px; }
+.legal .small { margin-bottom: 20px; }
+.legal .back { display: inline-block; margin-bottom: 24px; font: 600 14px var(--f-display); }
+.legal .note { border-left: 3px solid var(--alert); padding: 4px 0 4px 14px; margin: 18px 0; }
+.site-foot { border-top: 1px solid var(--rule); margin-top: 48px; padding: 24px 16px 40px; color: var(--ink-2); font-size: 13px; line-height: 1.6; }
+.site-foot > div { max-width: 1100px; margin: 0 auto; display: grid; gap: 8px; }
+.site-foot nav { display: flex; flex-wrap: wrap; gap: 6px 18px; font-weight: 600; }
+.risk-note { margin: 16px 0 0; padding: 10px 14px; border: 1px solid var(--rule); border-left: 3px solid var(--alert); background: var(--surface); font-size: 13px; line-height: 1.5; color: var(--ink-2); border-radius: 4px; }
