@@ -1,6 +1,6 @@
 # Whisker Wire
 
-Fast, unfiltered market information for newer traders, with **Tick**, a tabby who reads articles with you and highlights what matters.
+A financial news radar that surfaces the stories the headlines overlook, written for readers newer to markets, with **Tick**, a tabby who reads articles with you and highlights what matters.
 
 ```
 python whisker-wire/server.py        # then open http://127.0.0.1:8787

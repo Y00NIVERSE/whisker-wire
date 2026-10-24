@@ -59,7 +59,7 @@ with a sticky segmented switch (Wire / Radar / Filings).
 
 - **Market row**: a second header row of pill buttons (short code in mono plus name). The selected pill is filled ink and is
   scrolled into view on phones. Everything below re-renders for that market: feeds, index strip, currency, Value Radar.
-- **Intro**: the H1 states what the product is ("A stock-news radar for newer traders.") and never collapses. The lede, the
+- **Intro**: the H1 states what the product is ("The financial news radar for the stories the headlines overlook.") and never collapses. The lede, the
   three one-line feature descriptions and the disclaimer sit below it and can be tucked away with "Hide details".
 - **Pages, not scroll**: lists paginate (wire 10, radar 5, filings 10) with a mono "Showing 1 to 10 of 160" range and
   numbered buttons. The reader splits at about 2,000 characters, roughly one screen. Motion stays limited: no page transitions.
