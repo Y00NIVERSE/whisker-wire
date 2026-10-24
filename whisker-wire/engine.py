@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pdftext
 import track
+import markets
 from markets import MARKETS, valid_market
 from textutil import unwrap_lines
 from signals import SIGNALS, MAINSTREAM, TICKER_STOP
@@ -535,19 +536,64 @@ def get_spark(sym):
     return cached("spark:" + sym.upper(), 600, run)
 
 
+_NAME_TAIL = re.compile(r"[\s,.]+(?:ltd|limited|inc|incorporated|corp|corporation|co|company|plc|pte|bhd|berhad|sa|ag|nv|se|"
+                        r"holdings?|group|class [a-z]|adr|ord|sgd|usd)\.?$", re.I)
+
+
+def news_names(meta):
+    """The names a newsroom would use for a listed company: Yahoo's short name and its long name without 'Ltd.' etc."""
+    out = []
+    for raw in (meta.get("shortName"), meta.get("longName")):
+        n = (raw or "").strip()
+        while n and _NAME_TAIL.search(n):
+            n = _NAME_TAIL.sub("", n).strip()
+        if n.isupper() and len(n) > 5:
+            n = n.title()                        # "TENCENT" -> "Tencent"; "DBS" stays as it is
+        n = n.replace('"', "")
+        if 2 <= len(n) <= 40 and n.lower() not in [x.lower() for x in out]:
+            out.append(n)
+    return out
+
+
+def _ticker_news(sym, meta):
+    """Stories about a company. A US ticker is a fair search word. Elsewhere ('BN4.SI') nobody writes the ticker, so
+    search for the company's name, with its own country's Google News edition so local outlets come first."""
+    mid = markets.SUFFIX_MARKET.get(m.group(1)) if (m := markets.EXCHANGE_RX.search(sym)) else None
+    names = news_names(meta) if mid else []
+    loc = MARKETS.get(mid, {}).get("loc") or markets._US
+    topics = "(shares OR stock OR results OR earnings OR profit OR dividend)"
+    for days in (7, 30):
+        if names:
+            q = "(" + " OR ".join(f'"{n}"' for n in names) + ") " + topics + f" when:{days}d"
+        else:
+            q = f'"{sym.upper()}" stock when:{days}d'
+        data, _ = http_get(markets.gn_url(q, loc))
+        items = parse_feed(data)
+        if names:        # keep stories that name the company in the headline, if enough of them do
+            key = [n.lower() for n in names]
+            named = [i for i in items if any(k in i["title"].lower() for k in key)]
+            items = named if len(named) >= 3 else items
+        if len(items) >= 3 or days == 30:
+            break
+    return [{"title": re.sub(r" - [^-]+$", "", i["title"]), "url": i["link"], "publisher": i["source"],
+             "ts": int(i["ts"] or 0)} for i in items[:8]]
+
+
 def get_ticker(sym):
     if not SYM_RE.match(sym):
         raise ValueError("bad symbol")
 
     def run():
-        q = urllib.parse.quote(f'"{sym.upper()}" stock when:7d')
         try:
-            data, _ = http_get(GN + q)
-            news = [{"title": re.sub(r" - [^-]+$", "", i["title"]), "url": i["link"], "publisher": i["source"],
-                     "ts": int(i["ts"] or 0)} for i in parse_feed(data)[:8]]
+            r = _chart(sym.upper(), "6mo")
+        except Exception:
+            r = {"meta": {}, "indicators": {"quote": [{}]}}
+        closes = [round(c, 2) for c in (r["indicators"]["quote"][0].get("close") or []) if c is not None]
+        try:
+            news = _ticker_news(sym, r.get("meta") or {})
         except Exception:
             news = []
-        return {"symbol": sym.upper(), "spark": get_spark(sym)["closes"], "news": news}
+        return {"symbol": sym.upper(), "spark": closes, "news": news}
     return cached("ticker:" + sym.upper(), 300, run)
 
 

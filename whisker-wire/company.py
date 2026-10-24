@@ -24,6 +24,7 @@ from html.parser import HTMLParser
 
 import engine
 import lens
+import markets
 import pdftext
 from textutil import sentences, unwrap_lines
 
@@ -340,11 +341,7 @@ def _filing_ref(cik, row):
     return None if not row else {"form": row["form"], "filed": row["filingDate"], "period": row["reportDate"], "url": _doc_url(cik, row)}
 
 
-# Yahoo's exchange suffixes. A single trailing letter (BRK.B) is a share class, not an exchange.
-_EXCHANGE = re.compile(r"\.([A-Z]{2,3}|[LTV])$")
-_SUFFIX_MARKET = {"SI": "sg", "HK": "hk", "L": "uk", "T": "jp", "NS": "in", "BO": "in", "AX": "au", "TO": "ca", "V": "ca",
-                  "SS": "cn", "SZ": "cn", "DE": "eu", "PA": "eu", "AS": "eu", "MI": "eu", "MC": "eu", "SW": "eu",
-                  "ST": "eu", "CO": "eu", "OL": "eu", "HE": "eu", "BR": "eu", "LS": "eu", "VI": "eu", "IR": "eu"}
+_EXCHANGE, _SUFFIX_MARKET = markets.EXCHANGE_RX, markets.SUFFIX_MARKET
 
 
 def _clean_symbol(symbol):

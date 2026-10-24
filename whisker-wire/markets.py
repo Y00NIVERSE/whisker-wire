@@ -10,6 +10,13 @@ import urllib.parse
 _US = ("en-US", "US", "US:en")
 
 
+# Yahoo's exchange suffixes. A single trailing letter (BRK.B) is a share class, not an exchange.
+EXCHANGE_RX = re.compile(r"\.([A-Z]{2,3}|[LTV])$")
+SUFFIX_MARKET = {"SI": "sg", "HK": "hk", "L": "uk", "T": "jp", "NS": "in", "BO": "in", "AX": "au", "TO": "ca", "V": "ca",
+                 "SS": "cn", "SZ": "cn", "DE": "eu", "PA": "eu", "AS": "eu", "MI": "eu", "MC": "eu", "SW": "eu",
+                 "ST": "eu", "CO": "eu", "OL": "eu", "HE": "eu", "BR": "eu", "LS": "eu", "VI": "eu", "IR": "eu"}
+
+
 def gn_url(query, loc):
     hl, gl, ceid = loc
     return f"https://news.google.com/rss/search?hl={hl}&gl={gl}&ceid={ceid}&q=" + urllib.parse.quote(query)

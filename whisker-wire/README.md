@@ -76,7 +76,7 @@ Urgent is 8 or more points and confirmed; Watch is 5 to 7 (or 8 or more but unco
 ## Development
 
 ```
-python -m unittest discover -s whisker-wire/tests -v     # offline tests (343)
+python -m unittest discover -s whisker-wire/tests -v     # offline tests (350)
 ```
 
 Design rules are in `DESIGN.md` (awesome-design-md format, with taste-skill dials).
