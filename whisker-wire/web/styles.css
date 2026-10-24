@@ -399,6 +399,9 @@ body::after {
 .tape:hover .tape-track, .tape:focus-within .tape-track { animation-play-state: paused; }
 @keyframes tape-scroll { to { transform: translateX(-50%); } }
 .tape-item { display: inline-flex; align-items: baseline; gap: 8px; padding: 0 20px; border-right: 1px solid color-mix(in srgb, var(--paper) 18%, transparent); font-size: 13px; color: var(--paper); white-space: nowrap; }
+.tape-item { background: none; border-top: 0; border-bottom: 0; border-left: 0; cursor: pointer; text-align: left; }
+.tape-item:hover .tape-t, .tape-item:focus-visible .tape-t { color: var(--paper); text-decoration: underline; text-underline-offset: 3px; }
+.tape-item:focus-visible { outline-offset: -2px; }
 .tape-item b { font-size: 12px; color: var(--alert); }
 .tape-tk { font-weight: 700; letter-spacing: .02em; }
 .tape-dir { font-size: 10px; }

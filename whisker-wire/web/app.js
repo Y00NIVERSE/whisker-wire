@@ -633,9 +633,12 @@ function revealed(key, el, { countTo, countEl } = {}) {
 }
 
 /* ------------------------------------------------------------ the ticker tape (header) */
-function tapeItem(s) {
+function tapeItem(s, copy) {
   const dirCls = s.dir === "bull" ? "up" : s.dir === "bear" ? "down" : "flat";
-  return h("span", { class: "tape-item" },
+  // each headline opens in the reader here, with Tick's highlights. The second, looping copy is for the eye only.
+  const attrs = { class: "tape-item", type: "button", title: "Read this here with Tick", onclick: () => openReader({ story: s }) };
+  if (copy) { attrs["aria-hidden"] = "true"; attrs.tabindex = "-1"; }
+  return h("button", attrs,
     h("b", { class: "mono", text: String(s.score) }),
     s.tickers[0] && h("span", { class: "tape-tk mono", text: s.tickers[0] }),
     h("span", { class: "tape-dir " + dirCls, "aria-hidden": "true", text: s.dir === "bull" ? "▲" : s.dir === "bear" ? "▼" : "•" }),
@@ -649,7 +652,7 @@ function renderTape() {
   if (!items.length) { $("#tape").hidden = true; return; }
   $("#tape").hidden = false;
   // two copies back to back so translateX(-50%) loops seamlessly; duration scales with content so speed stays steady
-  fill(track, items.map(tapeItem), items.map(tapeItem));
+  fill(track, items.map((s) => tapeItem(s, false)), items.map((s) => tapeItem(s, true)));
   track.style.animationDuration = Math.max(26, items.length * 3.4) + "s";
 }
 
